@@ -1,0 +1,95 @@
+{
+  "name": "zai-quota-monitor",
+  "displayName": "Z.ai Quota Monitor",
+  "description": "Monitor Z.ai GLM Coding Plan quota with real-time reset countdown in the status bar",
+  "version": "1.0.0",
+  "publisher": "techmoon",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sliven/techmoon-codex"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other",
+    "Visualization"
+  ],
+  "keywords": [
+    "zai",
+    "z.ai",
+    "glm",
+    "quota",
+    "usage",
+    "monitor",
+    "countdown"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "zaiQuota.refresh",
+        "title": "Refresh Quota",
+        "category": "Z.ai Quota"
+      },
+      {
+        "command": "zaiQuota.configure",
+        "title": "Configure Settings",
+        "category": "Z.ai Quota"
+      },
+      {
+        "command": "zaiQuota.showDetail",
+        "title": "Show Detail Panel",
+        "category": "Z.ai Quota"
+      },
+      {
+        "command": "zaiQuota.debugRaw",
+        "title": "Debug: Show Raw API Responses",
+        "category": "Z.ai Quota"
+      }
+    ],
+    "configuration": {
+      "title": "Z.ai Quota Monitor",
+      "properties": {
+        "zaiQuota.refreshInterval": {
+          "type": "number",
+          "default": 5,
+          "minimum": 1,
+          "description": "Auto-refresh interval in minutes",
+          "order": 1
+        },
+        "zaiQuota.warnThreshold": {
+          "type": "number",
+          "default": 85,
+          "minimum": 50,
+          "maximum": 100,
+          "description": "Percentage threshold for status bar warning color",
+          "order": 2
+        },
+        "zaiQuota.showCountdown": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show reset countdown in status bar text",
+          "order": 3
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts",
+    "package": "npx @vscode/vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^18.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.0.0",
+    "typescript": "^5.1.0"
+  }
+}
