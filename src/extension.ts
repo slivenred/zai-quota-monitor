@@ -70,13 +70,13 @@ async function refreshUsage(context: vscode.ExtensionContext): Promise<void> {
 
     // Show actionable error notification
     const action = await vscode.window.showErrorMessage(
-      `Z.ai Quota: ${msg}`,
-      'Configure',
-      'Retry',
+      `Z.ai Quota Monitor: ${msg}`,
+      '開啟設定',
+      '重試',
     );
-    if (action === 'Configure') {
+    if (action === '開啟設定') {
       vscode.commands.executeCommand('zaiQuota.configure');
-    } else if (action === 'Retry') {
+    } else if (action === '重試') {
       refreshUsage(context);
     }
   }
@@ -96,7 +96,7 @@ function checkNotifications(data: UsageData): void {
     const resetInfo = tokenQuota.nextResetTime
       ? `，將在 ${tokenQuota.nextResetTime.toLocaleTimeString('zh-TW')} 重置`
       : '';
-    vscode.window.showWarningMessage(`❌ 5 小時配額已用盡${resetInfo}`);
+    vscode.window.showWarningMessage(`Z.ai Quota Monitor: 5 小時配額已用盡${resetInfo}。`);
     return;
   }
 
@@ -107,7 +107,7 @@ function checkNotifications(data: UsageData): void {
       ? `，將在 ${tokenQuota.nextResetTime.toLocaleTimeString('zh-TW')} 重置`
       : '';
     vscode.window.showInformationMessage(
-      `⚠️ 5 小時配額即將用盡 (${pct.toFixed(0)}%)${resetInfo}`,
+      `Z.ai Quota Monitor: 5 小時配額已使用 ${pct.toFixed(0)}%${resetInfo}。`,
     );
     return;
   }
@@ -138,21 +138,45 @@ function stopRefreshTimer(): void {
 // ============================================================================
 
 async function configureSettings(context: vscode.ExtensionContext): Promise<void> {
-  const options = ['更新 API Key', '更改刷新間隔', '更改警告閾值'];
+  type SettingsItem = vscode.QuickPickItem & {
+    action: 'apiKey' | 'refreshInterval' | 'warnThreshold';
+  };
+
+  const options: SettingsItem[] = [
+    {
+      label: '$(key) API Key',
+      description: '更新授權憑證',
+      detail: 'API Key 會儲存在 VS Code SecretStorage 中。',
+      action: 'apiKey',
+    },
+    {
+      label: '$(sync) 自動刷新間隔',
+      description: '調整背景更新頻率',
+      detail: '以分鐘為單位，至少 1 分鐘。',
+      action: 'refreshInterval',
+    },
+    {
+      label: '$(warning) 警告閾值',
+      description: '調整狀態列警示時機',
+      detail: '當 5 小時配額使用率達到此百分比時，狀態列會切換為警示色。',
+      action: 'warnThreshold',
+    },
+  ];
   const selected = await vscode.window.showQuickPick(options, {
-    placeHolder: '選擇要設定的項目',
+    title: 'Z.ai Quota Monitor',
+    placeHolder: '選擇要調整的設定項目',
   });
 
   if (!selected) return;
 
-  if (selected === '更新 API Key') {
+  if (selected.action === 'apiKey') {
     // Show instructions
     const open = await vscode.window.showInformationMessage(
-      '請前往 https://z.ai/manage-apikey 取得 API Key',
-      'Open URL',
-      'Enter Key',
+      '請前往 Z.ai 管理頁面取得 API Key，完成後回到 VS Code 貼上。',
+      '開啟 API Key 頁面',
+      '輸入 API Key',
     );
-    if (open === 'Open URL') {
+    if (open === '開啟 API Key 頁面') {
       vscode.env.openExternal(vscode.Uri.parse('https://z.ai/manage-apikey'));
     }
 
@@ -169,16 +193,16 @@ async function configureSettings(context: vscode.ExtensionContext): Promise<void
 
     if (key) {
       await getSecretStorage(context).store(SECRET_KEY, key.trim());
-      vscode.window.showInformationMessage('✅ API Key 已儲存');
+      vscode.window.showInformationMessage('Z.ai API Key 已安全儲存。');
       notifiedLowQuota = false;
       notifiedExhausted = false;
       refreshUsage(context);
     }
-  } else if (selected === '更改刷新間隔') {
+  } else if (selected.action === 'refreshInterval') {
     const config = vscode.workspace.getConfiguration('zaiQuota');
     const current = config.get<number>('refreshInterval', 5);
     const value = await vscode.window.showInputBox({
-      prompt: '自動刷新間隔（分鐘）',
+      prompt: '設定自動刷新間隔（分鐘）',
       value: String(current),
       validateInput: (v) => {
         const n = Number(v);
@@ -189,11 +213,11 @@ async function configureSettings(context: vscode.ExtensionContext): Promise<void
     if (value) {
       await config.update('refreshInterval', Number(value), vscode.ConfigurationTarget.Global);
     }
-  } else if (selected === '更改警告閾值') {
+  } else if (selected.action === 'warnThreshold') {
     const config = vscode.workspace.getConfiguration('zaiQuota');
     const current = config.get<number>('warnThreshold', 85);
     const value = await vscode.window.showInputBox({
-      prompt: '狀態欄變黃的百分比閾值',
+      prompt: '設定狀態列警告閾值百分比',
       value: String(current),
       validateInput: (v) => {
         const n = Number(v);
@@ -208,6 +232,13 @@ async function configureSettings(context: vscode.ExtensionContext): Promise<void
 }
 
 async function showDetail(context: vscode.ExtensionContext): Promise<void> {
+  // No API key → open configure dialog directly
+  const apiKey = await getApiKey(context);
+  if (!apiKey) {
+    await configureSettings(context);
+    return;
+  }
+
   if (lastData) {
     indicator.showQuickPick(lastData);
   } else {
@@ -234,7 +265,7 @@ async function debugRaw(context: vscode.ExtensionContext): Promise<void> {
     outputChannel.show(true);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    vscode.window.showErrorMessage(`Debug fetch failed: ${msg}`);
+    vscode.window.showErrorMessage(`Z.ai Quota Monitor: 原始 API 回應擷取失敗。${msg}`);
   }
 }
 
@@ -278,10 +309,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     indicator.showNotConfigured();
     // Prompt to configure on first run
     const action = await vscode.window.showInformationMessage(
-      'Z.ai Quota Monitor — 設定 API Key 以啟用配額監控',
-      'Setup',
+      'Z.ai Quota Monitor 需要 API Key 才能啟用配額監控。',
+      '設定 API Key',
     );
-    if (action === 'Setup') {
+    if (action === '設定 API Key') {
       vscode.commands.executeCommand('zaiQuota.configure');
     }
   } else {

@@ -116,13 +116,13 @@ function classifyLimit(item: ApiQuotaLimitItem): QuotaLimit {
 
   if (item.type === 'TIME_LIMIT') {
     label = 'mcp';
-    displayLabel = 'MCP 用量 (月)';
+    displayLabel = 'MCP 月用量';
   } else if (item.periodType === 'WEEKLY') {
     label = 'weekly';
-    displayLabel = 'Token 用量 (週)';
+    displayLabel = '週 Token 配額';
   } else {
     label = 'token';
-    displayLabel = 'Token 用量 (5 小時)';
+    displayLabel = '5 小時 Token 配額';
   }
 
   return {

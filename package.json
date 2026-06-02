@@ -1,13 +1,13 @@
 {
   "name": "zai-quota-monitor",
   "displayName": "Z.ai Quota Monitor",
-  "description": "Monitor Z.ai GLM Coding Plan quota with real-time reset countdown in the status bar",
+  "description": "Monitor Z.ai GLM Coding Plan quota with a refined status bar overview and reset countdown",
   "version": "1.0.0",
-  "publisher": "techmoon",
+  "publisher": "slivenred",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/sliven/techmoon-codex"
+    "url": "https://github.com/slivenred/zai-quota-monitor"
   },
   "engines": {
     "vscode": "^1.85.0"
@@ -33,22 +33,22 @@
     "commands": [
       {
         "command": "zaiQuota.refresh",
-        "title": "Refresh Quota",
+        "title": "Refresh Usage",
         "category": "Z.ai Quota"
       },
       {
         "command": "zaiQuota.configure",
-        "title": "Configure Settings",
+        "title": "Configure Monitor",
         "category": "Z.ai Quota"
       },
       {
         "command": "zaiQuota.showDetail",
-        "title": "Show Detail Panel",
+        "title": "Open Usage Overview",
         "category": "Z.ai Quota"
       },
       {
         "command": "zaiQuota.debugRaw",
-        "title": "Debug: Show Raw API Responses",
+        "title": "Debug: Open Raw API Responses",
         "category": "Z.ai Quota"
       }
     ],

@@ -28,7 +28,7 @@ const ENDPOINTS = {
 };
 
 const REQUEST_TIMEOUT_MS = 15000;
-const PROGRESS_WIDTH = 20;
+const PROGRESS_WIDTH = 12;
 
 // ============================================================================
 // 工具函數
@@ -56,7 +56,7 @@ function progressBar(pct) {
   const clamped = Math.min(100, Math.max(0, pct));
   const filled = Math.round((clamped / 100) * PROGRESS_WIDTH);
   const empty = PROGRESS_WIDTH - filled;
-  return '█'.repeat(filled) + '░'.repeat(empty);
+  return '■'.repeat(filled) + '□'.repeat(empty);
 }
 
 /**
@@ -189,7 +189,7 @@ function displayResults({ quotaRes, modelRes, toolRes, startTime, endTime }) {
 
   console.log(`╔${'═'.repeat(W - 2)}╗`);
   console.log(line(''));
-  console.log(line('📊  Z.ai GLM Coding Plan — Quota Monitor'));
+  console.log(line('Z.ai GLM Coding Plan - Quota Monitor'));
   console.log(line(''));
   console.log(divider);
   console.log(line(`Platform:  Z.AI (api.z.ai)`));
@@ -197,12 +197,12 @@ function displayResults({ quotaRes, modelRes, toolRes, startTime, endTime }) {
   console.log(divider);
 
   // ── Quota Limits ──────────────────────────────────
-  console.log(line('🪙  QUOTA LIMITS'));
+  console.log(line('QUOTA LIMITS'));
   console.log(separator);
 
   const quotaData = quotaRes?.data || quotaRes;
   if (quotaRes?.error) {
-    console.log(line(`❌ ${quotaRes.error}`));
+    console.log(line(`Error: ${quotaRes.error}`));
   } else if (quotaData?.limits && Array.isArray(quotaData.limits)) {
     for (const limit of quotaData.limits) {
       const pct = typeof limit.percentage === 'number' ? limit.percentage : 0;
@@ -222,8 +222,8 @@ function displayResults({ quotaRes, modelRes, toolRes, startTime, endTime }) {
       if (limit.nextResetTime) {
         const countdown = fmtResetCountdown(limit.nextResetTime);
         const exactTime = formatResetTime(limit.nextResetTime);
-        if (countdown) console.log(line(`  ⏰ ${countdown}`));
-        if (exactTime) console.log(line(`  🕐 Reset at: ${exactTime}`));
+        if (countdown) console.log(line(`  ${countdown}`));
+        if (exactTime) console.log(line(`  Reset at: ${exactTime}`));
       }
 
       // MCP 用量明細
@@ -235,7 +235,7 @@ function displayResults({ quotaRes, modelRes, toolRes, startTime, endTime }) {
     // 額外顯示帳戶方案（如有）
     if (quotaData.planName) {
       console.log(separator);
-      console.log(line(`🏷️  Plan: ${quotaData.planName}`));
+      console.log(line(`Plan: ${quotaData.planName}`));
     }
   } else {
     console.log(line('No quota data available'));
@@ -243,12 +243,12 @@ function displayResults({ quotaRes, modelRes, toolRes, startTime, endTime }) {
   console.log(divider);
 
   // ── Model Usage ───────────────────────────────────
-  console.log(line('🤖  MODEL USAGE (24h)'));
+  console.log(line('MODEL USAGE (24h)'));
   console.log(separator);
 
   const modelData = modelRes?.data || modelRes;
   if (modelRes?.error) {
-    console.log(line(`❌ ${modelRes.error}`));
+    console.log(line(`Error: ${modelRes.error}`));
   } else if (modelData?.totalUsage) {
     const tu = modelData.totalUsage;
     if (tu.totalTokensUsage !== undefined) {
@@ -265,12 +265,12 @@ function displayResults({ quotaRes, modelRes, toolRes, startTime, endTime }) {
   console.log(divider);
 
   // ── Tool/MCP Usage ────────────────────────────────
-  console.log(line('🛠️  TOOL / MCP USAGE (24h)'));
+  console.log(line('TOOL / MCP USAGE (24h)'));
   console.log(separator);
 
   const toolData = toolRes?.data || toolRes;
   if (toolRes?.error) {
-    console.log(line(`❌ ${toolRes.error}`));
+    console.log(line(`Error: ${toolRes.error}`));
   } else if (toolData?.totalUsage) {
     const tu = toolData.totalUsage;
     if (tu.totalNetworkSearchCount !== undefined) {
@@ -298,7 +298,7 @@ async function main() {
 
   if (!apiKey) {
     console.error('');
-    console.error('❌  未找到 Z.ai API Key');
+    console.error('未找到 Z.ai API Key');
     console.error('');
     console.error('請使用以下任一方式提供 API Key：');
     console.error('');
@@ -308,7 +308,7 @@ async function main() {
     console.error('  2. 命令列參數：');
     console.error('     node zai-quota.mjs --key YOUR_KEY');
     console.error('');
-    console.error('💡 API Key 可從 https://z.ai/manage-apikey 取得');
+    console.error('API Key 可從 https://z.ai/manage-apikey 取得');
     console.error('');
     process.exit(1);
   }
@@ -317,7 +317,7 @@ async function main() {
     const results = await queryAll(apiKey);
     displayResults(results);
   } catch (err) {
-    console.error(`\n❌ Error: ${err.message}\n`);
+    console.error(`\nError: ${err.message}\n`);
     process.exit(1);
   }
 }
