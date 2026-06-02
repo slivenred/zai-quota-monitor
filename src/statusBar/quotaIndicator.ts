@@ -3,6 +3,7 @@
  */
 
 import * as vscode from 'vscode';
+import { getStrings, type LocaleStrings } from '../i18n';
 import type { UsageData, QuotaLimit, ExtensionConfig } from '../types';
 
 // ============================================================================
@@ -30,7 +31,7 @@ function fmtPct(pct: number): string {
   return `${clampPct(pct).toFixed(1)}%`;
 }
 
-/** Format a human-readable file size (tokens → K / M / B) */
+/** Format a human-readable file size (tokens -> K / M / B) */
 function fmtTokens(n: number): string {
   if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -69,36 +70,43 @@ function fmtRemaining(
 }
 
 /** Format a countdown from now to a target Date */
-function fmtCountdown(target: Date): string {
+function fmtCountdown(target: Date, strings: LocaleStrings): string {
   const diff = target.getTime() - Date.now();
-  if (diff <= 0) return '即將重置';
+  if (diff <= 0) return strings.countdown.resettingSoon;
 
   const totalMin = Math.floor(diff / 60000);
   if (totalMin >= 24 * 60) {
     const days = Math.floor(totalMin / 1440);
     const hrs = Math.floor((totalMin % 1440) / 60);
-    return `${days} 天 ${hrs} 小時後`;
+    return strings.countdown.daysHours(days, hrs);
   }
   const hrs = Math.floor(totalMin / 60);
   const mins = totalMin % 60;
-  if (hrs > 0) return `${hrs} 小時 ${mins} 分鐘後`;
-  return `${mins} 分鐘後`;
+  if (hrs > 0) return strings.countdown.hoursMinutes(hrs, mins);
+  return strings.countdown.minutes(mins);
 }
 
 /** Format a short countdown for status bar (compact) */
-function fmtShortCountdown(target: Date): string {
+function fmtShortCountdown(target: Date, config: ExtensionConfig, strings: LocaleStrings): string {
   const diff = target.getTime() - Date.now();
-  if (diff <= 0) return '即將重置';
+  if (diff <= 0) return strings.countdown.resettingSoon;
 
   const totalMin = Math.floor(diff / 60000);
   if (totalMin >= 24 * 60) {
     const days = Math.floor(totalMin / 1440);
     const hrs = Math.floor((totalMin % 1440) / 60);
+    if (config.language === 'zh-CN') return `${days}天 ${hrs}时`;
+    if (config.language === 'zh-TW') return `${days}天 ${hrs}時`;
     return `${days}d ${hrs}h`;
   }
   const hrs = Math.floor(totalMin / 60);
   const mins = totalMin % 60;
-  if (hrs > 0) return `${hrs}h ${mins}m`;
+  if (hrs > 0) {
+    if (config.language === 'zh-CN') return `${hrs}时 ${mins}分`;
+    if (config.language === 'zh-TW') return `${hrs}時 ${mins}分`;
+    return `${hrs}h ${mins}m`;
+  }
+  if (config.language === 'zh-CN' || config.language === 'zh-TW') return `${mins}分`;
   return `${mins}m`;
 }
 
@@ -138,6 +146,10 @@ export class QuotaIndicator {
     this.showNotConfigured();
   }
 
+  private get strings(): LocaleStrings {
+    return getStrings(this._config.language);
+  }
+
   /** Update configuration */
   updateConfig(config: ExtensionConfig): void {
     this._config = config;
@@ -146,22 +158,25 @@ export class QuotaIndicator {
   // -- State Transitions --
 
   showNotConfigured(): void {
-    this.statusBarItem.text = '$(key) Z.ai 設定';
-    this.statusBarItem.tooltip = 'Z.ai Quota Monitor - 點擊設定 API Key';
+    const strings = this.strings;
+    this.statusBarItem.text = strings.status.notConfiguredText;
+    this.statusBarItem.tooltip = strings.status.notConfiguredTooltip;
     this.statusBarItem.backgroundColor = undefined;
     this.statusBarItem.show();
   }
 
   showLoading(): void {
-    this.statusBarItem.text = '$(sync~spin) Z.ai 更新中';
-    this.statusBarItem.tooltip = '正在更新 Z.ai 配額資料';
+    const strings = this.strings;
+    this.statusBarItem.text = strings.status.loadingText;
+    this.statusBarItem.tooltip = strings.status.loadingTooltip;
     this.statusBarItem.backgroundColor = undefined;
     this.statusBarItem.show();
   }
 
   showError(message: string): void {
-    this.statusBarItem.text = '$(error) Z.ai 錯誤';
-    this.statusBarItem.tooltip = `Z.ai 配額更新失敗: ${message}\n\n點擊開啟設定或重試`;
+    const strings = this.strings;
+    this.statusBarItem.text = strings.status.errorText;
+    this.statusBarItem.tooltip = strings.status.errorTooltip(message);
     this.statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
     this.statusBarItem.show();
   }
@@ -193,6 +208,7 @@ export class QuotaIndicator {
 
   /** Build status bar text */
   private updateStatusBarText(tokenQuota?: QuotaLimit): void {
+    const strings = this.strings;
     if (!tokenQuota) {
       this.statusBarItem.text = '$(pulse) Z.ai --';
       return;
@@ -201,7 +217,7 @@ export class QuotaIndicator {
     const pct = Math.round(clampPct(tokenQuota.percentage));
 
     if (pct >= 100) {
-      this.statusBarItem.text = '$(error) Z.ai 已用盡';
+      this.statusBarItem.text = strings.status.exhaustedText;
       return;
     }
 
@@ -209,7 +225,7 @@ export class QuotaIndicator {
 
     // Append countdown if enabled and reset time exists
     if (this._config.showCountdown && tokenQuota.nextResetTime) {
-      const countdown = fmtShortCountdown(tokenQuota.nextResetTime);
+      const countdown = fmtShortCountdown(tokenQuota.nextResetTime, this._config, strings);
       text += ` · ${countdown}`;
     }
 
@@ -223,18 +239,19 @@ export class QuotaIndicator {
     weeklyQuota?: QuotaLimit,
     mcpQuota?: QuotaLimit,
   ): vscode.MarkdownString {
+    const strings = this.strings;
     const md = new vscode.MarkdownString(undefined, true);
 
     md.appendMarkdown('### Z.ai Quota Monitor\n\n');
     if (data.planName) {
-      md.appendMarkdown(`**方案:** ${data.planName}\n\n`);
+      md.appendMarkdown(`**${strings.quota.plan}:** ${data.planName}\n\n`);
     }
 
     // -- 5-hour token quota --
     if (tokenQuota) {
-      this.appendQuotaSection(md, '5 小時 Token 配額', tokenQuota, {
+      this.appendQuotaSection(md, strings.quota.token5h, tokenQuota, {
         valueFormatter: fmtTokens,
-        unit: 'tokens',
+        unit: strings.quota.tokensUnit,
         resetFormatter: fmtTime,
       });
     }
@@ -242,7 +259,7 @@ export class QuotaIndicator {
     // -- Weekly quota --
     if (weeklyQuota) {
       md.appendMarkdown('---\n\n');
-      this.appendQuotaSection(md, '週 Token 配額', weeklyQuota, {
+      this.appendQuotaSection(md, strings.quota.weeklyToken, weeklyQuota, {
         resetFormatter: fmtDateTime,
       });
     }
@@ -250,9 +267,9 @@ export class QuotaIndicator {
     // -- MCP quota --
     if (mcpQuota) {
       md.appendMarkdown('---\n\n');
-      this.appendQuotaSection(md, 'MCP 月用量', mcpQuota);
+      this.appendQuotaSection(md, strings.quota.mcpMonthly, mcpQuota);
       if (mcpQuota.usageDetails && mcpQuota.usageDetails.length > 0) {
-        md.appendMarkdown('**工具明細**\n\n');
+        md.appendMarkdown(`**${strings.quota.toolDetails}**\n\n`);
         for (const d of mcpQuota.usageDetails) {
           md.appendMarkdown(`- \`${d.modelCode}\`: ${fmtNum(d.usage)}\n`);
         }
@@ -263,19 +280,25 @@ export class QuotaIndicator {
     // -- Model usage --
     if (data.modelUsage || data.toolUsage) {
       md.appendMarkdown('---\n\n');
-      md.appendMarkdown('#### 24 小時活動\n\n');
+      md.appendMarkdown(`#### ${strings.tooltip.activity24h}\n\n`);
 
       if (data.modelUsage) {
-        md.appendMarkdown(`- 模型呼叫: **${fmtNum(data.modelUsage.totalCalls)}**\n`);
-        md.appendMarkdown(`- Token 用量: **${fmtNum(data.modelUsage.totalTokens)}**\n`);
+        md.appendMarkdown(`- ${strings.tooltip.modelCalls}: **${fmtNum(data.modelUsage.totalCalls)}**\n`);
+        md.appendMarkdown(`- ${strings.tooltip.tokenUsage}: **${fmtNum(data.modelUsage.totalTokens)}**\n`);
       }
 
       if (data.toolUsage) {
         const parts: string[] = [];
-        if (data.toolUsage.networkSearches) parts.push(`搜尋 ${fmtNum(data.toolUsage.networkSearches)}`);
-        if (data.toolUsage.webReads) parts.push(`網頁讀取 ${fmtNum(data.toolUsage.webReads)}`);
-        if (data.toolUsage.zreadCalls) parts.push(`ZRead ${fmtNum(data.toolUsage.zreadCalls)}`);
-        md.appendMarkdown(`- MCP 工具: **${parts.length > 0 ? parts.join(' · ') : '無使用紀錄'}**\n`);
+        if (data.toolUsage.networkSearches) {
+          parts.push(strings.tooltip.networkSearches(fmtNum(data.toolUsage.networkSearches)));
+        }
+        if (data.toolUsage.webReads) {
+          parts.push(strings.tooltip.webReads(fmtNum(data.toolUsage.webReads)));
+        }
+        if (data.toolUsage.zreadCalls) {
+          parts.push(strings.tooltip.zread(fmtNum(data.toolUsage.zreadCalls)));
+        }
+        md.appendMarkdown(`- ${strings.tooltip.mcpTools}: **${parts.length > 0 ? parts.join(' · ') : strings.tooltip.noUsageRecord}**\n`);
       }
 
       md.appendMarkdown('\n');
@@ -284,8 +307,8 @@ export class QuotaIndicator {
     // -- Footer --
     md.appendMarkdown('---\n\n');
     const ago = Math.round((Date.now() - data.fetchedAt.getTime()) / 60000);
-    md.appendMarkdown(`已連線 · 最後更新 ${ago} 分鐘前\n\n`);
-    md.appendMarkdown('點擊開啟配額總覽與操作選單');
+    md.appendMarkdown(`${strings.tooltip.connectedAgo(ago)}\n\n`);
+    md.appendMarkdown(strings.tooltip.openOverview);
 
     return md;
   }
@@ -300,6 +323,7 @@ export class QuotaIndicator {
       resetFormatter?: (d: Date) => string;
     } = {},
   ): void {
+    const strings = this.strings;
     const valueFormatter = options.valueFormatter ?? fmtNum;
     const resetFormatter = options.resetFormatter ?? fmtDateTime;
     const status = this.formatQuotaStatus(quota.percentage);
@@ -310,57 +334,63 @@ export class QuotaIndicator {
     md.appendMarkdown(`${progressBar(quota.percentage)} **${fmtPct(quota.percentage)}** · ${status}\n\n`);
 
     if (usage) {
-      md.appendMarkdown(`- 已用: **${usage}**\n`);
+      md.appendMarkdown(`- ${strings.quota.used}: **${usage}**\n`);
     }
     if (remaining) {
-      md.appendMarkdown(`- 剩餘: **${remaining}**\n`);
+      md.appendMarkdown(`- ${strings.quota.remaining}: **${remaining}**\n`);
     }
     if (quota.nextResetTime) {
-      md.appendMarkdown(`- 重置倒數: **${fmtCountdown(quota.nextResetTime)}**\n`);
-      md.appendMarkdown(`- 重置時間: **${resetFormatter(quota.nextResetTime)}**\n`);
+      md.appendMarkdown(`- ${strings.quota.resetCountdown}: **${fmtCountdown(quota.nextResetTime, strings)}**\n`);
+      md.appendMarkdown(`- ${strings.quota.resetTime}: **${resetFormatter(quota.nextResetTime)}**\n`);
     }
     md.appendMarkdown('\n');
   }
 
   private formatQuotaStatus(pct: number): string {
+    const strings = this.strings;
     const clamped = clampPct(pct);
-    if (clamped >= 100) return '已用盡';
-    if (clamped >= this._config.warnThreshold) return '接近上限';
-    return '正常';
+    if (clamped >= 100) return strings.quota.exhausted;
+    if (clamped >= this._config.warnThreshold) return strings.quota.nearLimit;
+    return strings.quota.healthy;
   }
 
   /** Show Quick Pick detail menu */
   async showQuickPick(data: UsageData): Promise<void> {
+    type ActionItem = vscode.QuickPickItem & {
+      action?: 'refresh' | 'settings';
+    };
+
+    const strings = this.strings;
     const tokenQuota = findQuota(data.quotas, 'token');
     const weeklyQuota = findQuota(data.quotas, 'weekly');
     const mcpQuota = findQuota(data.quotas, 'mcp');
 
-    const items: vscode.QuickPickItem[] = [];
+    const items: ActionItem[] = [];
 
     // -- Quota items --
-    items.push({ label: '配額狀態', kind: vscode.QuickPickItemKind.Separator });
+    items.push({ label: strings.quickPick.quotaStatus, kind: vscode.QuickPickItemKind.Separator });
     let hasQuotaItems = false;
 
     if (tokenQuota) {
       hasQuotaItems = true;
-      const countdown = tokenQuota.nextResetTime ? fmtCountdown(tokenQuota.nextResetTime) : '';
+      const countdown = tokenQuota.nextResetTime ? fmtCountdown(tokenQuota.nextResetTime, strings) : '';
       items.push({
-        label: '$(watch) 5 小時 Token 配額',
-        description: `已用 ${fmtPct(tokenQuota.percentage)}`,
+        label: `$(watch) ${strings.quota.token5h}`,
+        description: strings.quickPick.usedPercentage(fmtPct(tokenQuota.percentage)),
         detail: tokenQuota.nextResetTime
-          ? `重置倒數 ${countdown} · 重置時間 ${fmtTime(tokenQuota.nextResetTime)}`
+          ? strings.quickPick.resetDetail(countdown, fmtTime(tokenQuota.nextResetTime))
           : undefined,
       });
     }
 
     if (weeklyQuota) {
       hasQuotaItems = true;
-      const countdown = weeklyQuota.nextResetTime ? fmtCountdown(weeklyQuota.nextResetTime) : '';
+      const countdown = weeklyQuota.nextResetTime ? fmtCountdown(weeklyQuota.nextResetTime, strings) : '';
       items.push({
-        label: '$(calendar) 週 Token 配額',
-        description: `已用 ${fmtPct(weeklyQuota.percentage)}`,
+        label: `$(calendar) ${strings.quota.weeklyToken}`,
+        description: strings.quickPick.usedPercentage(fmtPct(weeklyQuota.percentage)),
         detail: weeklyQuota.nextResetTime
-          ? `重置倒數 ${countdown} · 重置時間 ${fmtDateTime(weeklyQuota.nextResetTime)}`
+          ? strings.quickPick.resetDetail(countdown, fmtDateTime(weeklyQuota.nextResetTime))
           : undefined,
       });
     }
@@ -369,61 +399,69 @@ export class QuotaIndicator {
       hasQuotaItems = true;
       const usage = fmtUsage(mcpQuota);
       items.push({
-        label: '$(plug) MCP 月用量',
-        description: `已用 ${fmtPct(mcpQuota.percentage)}`,
-        detail: usage ? `用量 ${usage}` : undefined,
+        label: `$(plug) ${strings.quota.mcpMonthly}`,
+        description: strings.quickPick.usedPercentage(fmtPct(mcpQuota.percentage)),
+        detail: usage ? strings.quickPick.mcpUsageDetail(usage) : undefined,
       });
     }
 
     if (!hasQuotaItems) {
       items.push({
-        label: '$(info) 尚無配額資料',
-        description: '請重新整理或檢查 API 回應',
+        label: strings.quickPick.noQuotaData,
+        description: strings.quickPick.noQuotaDataDescription,
       });
     }
 
     // -- Separator --
     if (data.modelUsage || data.toolUsage) {
-      items.push({ label: '24 小時活動', kind: vscode.QuickPickItemKind.Separator });
+      items.push({ label: strings.quickPick.activity24h, kind: vscode.QuickPickItemKind.Separator });
     }
 
     // -- Usage items --
     if (data.modelUsage) {
       items.push({
-        label: '$(graph-line) 模型用量',
-        description: `${fmtNum(data.modelUsage.totalCalls)} 次呼叫`,
-        detail: `Token 用量 ${fmtNum(data.modelUsage.totalTokens)}`,
+        label: strings.quickPick.modelUsage,
+        description: strings.quickPick.modelCallsDescription(fmtNum(data.modelUsage.totalCalls)),
+        detail: strings.quickPick.tokenUsageDetail(fmtNum(data.modelUsage.totalTokens)),
       });
     }
 
     if (data.toolUsage) {
       const parts: string[] = [];
-      if (data.toolUsage.networkSearches) parts.push(`${data.toolUsage.networkSearches} 搜尋`);
-      if (data.toolUsage.webReads) parts.push(`${data.toolUsage.webReads} 讀取`);
+      if (data.toolUsage.networkSearches) parts.push(strings.quickPick.searchCount(data.toolUsage.networkSearches));
+      if (data.toolUsage.webReads) parts.push(strings.quickPick.readCount(data.toolUsage.webReads));
       if (data.toolUsage.zreadCalls) parts.push(`${data.toolUsage.zreadCalls} ZRead`);
       items.push({
-        label: '$(tools) MCP 工具用量',
-        description: parts.length > 0 ? parts.join(' · ') : '無使用紀錄',
+        label: strings.quickPick.toolUsage,
+        description: parts.length > 0 ? parts.join(' · ') : strings.quickPick.noUsageRecord,
       });
     }
 
     // -- Separator --
-    items.push({ label: '操作', kind: vscode.QuickPickItemKind.Separator });
+    items.push({ label: strings.quickPick.actions, kind: vscode.QuickPickItemKind.Separator });
 
     // -- Actions --
-    items.push({ label: '$(refresh) 重新整理配額', description: '立即更新最新用量' });
-    items.push({ label: '$(gear) 開啟設定', description: 'API Key、刷新間隔、警告閾值' });
+    items.push({
+      label: strings.quickPick.refreshQuota,
+      description: strings.quickPick.refreshQuotaDescription,
+      action: 'refresh',
+    });
+    items.push({
+      label: strings.quickPick.openSettings,
+      description: strings.quickPick.openSettingsDescription,
+      action: 'settings',
+    });
 
     const selected = await vscode.window.showQuickPick(items, {
-      placeHolder: '查看配額狀態或選擇操作',
+      placeHolder: strings.quickPick.placeholder,
       title: 'Z.ai Quota Monitor',
     });
 
     if (!selected) return;
 
-    if (selected.label.includes('重新整理')) {
+    if (selected.action === 'refresh') {
       vscode.commands.executeCommand('zaiQuota.refresh');
-    } else if (selected.label.includes('設定')) {
+    } else if (selected.action === 'settings') {
       vscode.commands.executeCommand('zaiQuota.configure');
     }
   }

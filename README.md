@@ -1,75 +1,83 @@
 # Z.ai Quota Monitor
 
-VS Code 擴展，即時監控 Z.ai GLM Coding Plan 配額，並以精簡、專業的狀態列總覽呈現用量百分比與重置倒數。
+Language: **English** | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md)
 
-## 功能
+A VS Code extension that monitors Z.ai GLM Coding Plan quota and shows a clean status bar overview with usage percentage and reset countdown.
 
-- **狀態列總覽** - 顯示用量百分比與重置倒數，例如 `Z.ai 83% · 3h 17m`
-- **專業 tooltip 面板** - 以分區資訊呈現 5 小時配額、週配額、MCP 用量與重置時間
-- **狀態色警示** - 用量超過閾值時使用警示色，耗盡時使用錯誤色
-- **配額總覽選單** - 點擊狀態列即可查看 Quick Pick 操作選單
-- **自動刷新** - 可設定更新間隔，預設 5 分鐘
-- **安全儲存** - API Key 使用 VS Code SecretStorage 加密
-- **MCP 工具明細** - 顯示網頁搜尋、Web Read、ZRead 用量
-- **除錯模式** - 查看原始 API 回應
+## Features
 
-## 安裝
+- **Status bar overview** - Shows usage percentage and reset countdown, for example `Z.ai 83% · 3h 17m`
+- **Rich tooltip panel** - Displays 5-hour quota, weekly quota, MCP usage, and reset times
+- **Status color warnings** - Uses warning color above the configured threshold and error color when quota is exhausted
+- **Quota overview menu** - Click the status bar item to open a Quick Pick overview and actions
+- **Auto refresh** - Configurable update interval, default 5 minutes
+- **Secure storage** - API key is stored in VS Code SecretStorage
+- **MCP usage details** - Shows network search, Web Read, and ZRead usage
+- **Language switching** - Extension UI supports English, Simplified Chinese, and Traditional Chinese
+- **Debug mode** - Opens raw API responses for troubleshooting
 
-### 從 VSIX 安裝（推薦）
+## Installation
 
-1. 下載 `zai-quota-monitor-1.0.0.vsix`
-2. 在 VS Code 中執行 `Extensions: Install from VSIX...`
-3. 選擇下載的 `.vsix` 檔案
+### Install from VSIX
 
-### 手動建置
+1. Download `zai-quota-monitor-1.0.0.vsix`
+2. In VS Code, run `Extensions: Install from VSIX...`
+3. Select the downloaded `.vsix` file
+
+### Build manually
 
 ```bash
 npm install
 npm run compile
-# 按 F5 在 Extension Development Host 中除錯
-# 或打包：
+# Press F5 to debug in Extension Development Host
+# Or package the extension:
 npm run package
 ```
 
-## 使用方式
+## Usage
 
-1. 安裝後，VS Code 會提示設定 API Key
-2. 輸入你的 Z.ai API Key（從 https://z.ai/manage-apikey 取得）
-3. 狀態欄會自動顯示配額百分比和重置倒數
-4. 懸停查看完整 tooltip，點擊查看 Quick Pick 選單
+1. After installation, VS Code prompts you to set an API key
+2. Enter your Z.ai API key from https://z.ai/manage-apikey
+3. The status bar automatically shows quota percentage and reset countdown
+4. Hover to view the full tooltip, or click to open the Quick Pick overview
 
-## 命令
+## Commands
 
-| 命令 | 說明 |
-|------|------|
-| `Z.ai Quota: Refresh Quota` | 重新整理配額 |
-| `Z.ai Quota: Configure Settings` | 設定 API Key、刷新間隔 |
-| `Z.ai Quota: Show Detail Panel` | 顯示完整配額面板 |
-| `Z.ai Quota: Debug: Show Raw API Responses` | 除錯：顯示原始 API 回應 |
+| Command | Description |
+|---|---|
+| `Z.ai Quota: Refresh Usage` | Refresh quota data |
+| `Z.ai Quota: Configure Monitor` | Configure API key, refresh interval, warning threshold, and language |
+| `Z.ai Quota: Open Usage Overview` | Open the quota overview menu |
+| `Z.ai Quota: Debug: Open Raw API Responses` | Open raw API responses for debugging |
 
-## 設定
+## Settings
 
-| 設定 | 類型 | 預設 | 說明 |
-|------|------|------|------|
-| `zaiQuota.refreshInterval` | number | 5 | 自動刷新間隔（分鐘）|
-| `zaiQuota.warnThreshold` | number | 85 | 狀態欄變黃的百分比閾值 |
-| `zaiQuota.showCountdown` | boolean | true | 狀態欄顯示重置倒數 |
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `zaiQuota.refreshInterval` | number | `5` | Auto-refresh interval in minutes |
+| `zaiQuota.warnThreshold` | number | `85` | Status bar warning threshold percentage |
+| `zaiQuota.showCountdown` | boolean | `true` | Show reset countdown in status bar text |
+| `zaiQuota.language` | string | `en` | Display language: `en`, `zh-CN`, or `zh-TW` |
 
-## 獨立腳本
+## Standalone Script
 
-如果不想安裝擴展，也可以使用獨立腳本：
+If you do not want to install the extension, you can also use the standalone script:
 
 ```bash
 export ZAI_API_KEY="your-api-key"
 node zai-quota.mjs
 ```
 
-## 技術
+## Privacy
 
-- TypeScript，零運行時依賴
-- 使用 Node.js 內建 `https` 模組
-- API Key 存儲在 VS Code SecretStorage（加密）
+The extension stores your Z.ai API key in VS Code SecretStorage and uses it to call Z.ai quota monitoring endpoints. The key is not written to workspace files.
 
-## 授權
+## Tech
+
+- TypeScript with zero runtime dependencies
+- Uses Node.js built-in `https` module
+- API key is stored in VS Code SecretStorage
+
+## License
 
 MIT

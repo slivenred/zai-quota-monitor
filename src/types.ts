@@ -2,6 +2,8 @@
  * Z.ai Quota Monitor — Type Definitions
  */
 
+import type { Language } from './i18n';
+
 // ============================================================================
 // API Response Types (raw from Z.ai endpoints)
 // ============================================================================
@@ -108,4 +110,5 @@ export interface ExtensionConfig {
   refreshInterval: number;    // minutes
   warnThreshold: number;      // percentage
   showCountdown: boolean;
+  language: Language;
 }

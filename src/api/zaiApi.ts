@@ -27,6 +27,7 @@ import type {
 
 const API_BASE = 'https://api.z.ai';
 const REQUEST_TIMEOUT_MS = 15000;
+const DEFAULT_ACCEPT_LANGUAGE = 'en-US,en;q=0.9';
 
 const ENDPOINTS = {
   quotaLimit: `${API_BASE}/api/monitor/usage/quota/limit`,
@@ -60,7 +61,12 @@ function buildTimeWindowParams(): string {
 }
 
 /** Make an HTTPS GET request and return parsed JSON */
-function makeRequest(url: string, authToken: string, queryParams?: string): Promise<unknown> {
+function makeRequest(
+  url: string,
+  authToken: string,
+  queryParams?: string,
+  acceptLanguage = DEFAULT_ACCEPT_LANGUAGE,
+): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const parsed = new URL(url);
     const fullPath = queryParams
@@ -74,7 +80,7 @@ function makeRequest(url: string, authToken: string, queryParams?: string): Prom
       method: 'GET',
       headers: {
         'Authorization': authToken,  // NO "Bearer" prefix for Z.ai
-        'Accept-Language': 'en-US,en',
+        'Accept-Language': acceptLanguage,
         'Content-Type': 'application/json',
       },
     };
@@ -116,13 +122,13 @@ function classifyLimit(item: ApiQuotaLimitItem): QuotaLimit {
 
   if (item.type === 'TIME_LIMIT') {
     label = 'mcp';
-    displayLabel = 'MCP 月用量';
+    displayLabel = 'Monthly MCP Usage';
   } else if (item.periodType === 'WEEKLY') {
     label = 'weekly';
-    displayLabel = '週 Token 配額';
+    displayLabel = 'Weekly Token Quota';
   } else {
     label = 'token';
-    displayLabel = '5 小時 Token 配額';
+    displayLabel = '5-hour Token Quota';
   }
 
   return {
@@ -192,18 +198,18 @@ function processResponses(
  * Tries direct token auth first; on 401, falls back to Bearer format.
  * Individual endpoint failures are caught gracefully — only partial data is returned.
  */
-export async function fetchUsage(apiKey: string): Promise<UsageData> {
+export async function fetchUsage(apiKey: string, acceptLanguage = DEFAULT_ACCEPT_LANGUAGE): Promise<UsageData> {
   const timeParams = buildTimeWindowParams();
 
   // Fire all three requests in parallel; catch individually
   const [quotaRes, modelRes, toolRes] = await Promise.all([
-    makeRequest(ENDPOINTS.quotaLimit, apiKey)
+    makeRequest(ENDPOINTS.quotaLimit, apiKey, undefined, acceptLanguage)
       .then(r => r as ApiQuotaResponse)
       .catch(() => null),
-    makeRequest(ENDPOINTS.modelUsage, apiKey, timeParams)
+    makeRequest(ENDPOINTS.modelUsage, apiKey, timeParams, acceptLanguage)
       .then(r => r as ApiModelUsageResponse)
       .catch(() => null),
-    makeRequest(ENDPOINTS.toolUsage, apiKey, timeParams)
+    makeRequest(ENDPOINTS.toolUsage, apiKey, timeParams, acceptLanguage)
       .then(r => r as ApiToolUsageResponse)
       .catch(() => null),
   ]);
@@ -219,13 +225,16 @@ export async function fetchUsage(apiKey: string): Promise<UsageData> {
 /**
  * Fetch raw API responses for debugging.
  */
-export async function fetchRawResponses(apiKey: string): Promise<Record<string, unknown>> {
+export async function fetchRawResponses(
+  apiKey: string,
+  acceptLanguage = DEFAULT_ACCEPT_LANGUAGE,
+): Promise<Record<string, unknown>> {
   const timeParams = buildTimeWindowParams();
 
   const [quota, model, tool] = await Promise.all([
-    makeRequest(ENDPOINTS.quotaLimit, apiKey).catch(e => ({ error: String(e) })),
-    makeRequest(ENDPOINTS.modelUsage, apiKey, timeParams).catch(e => ({ error: String(e) })),
-    makeRequest(ENDPOINTS.toolUsage, apiKey, timeParams).catch(e => ({ error: String(e) })),
+    makeRequest(ENDPOINTS.quotaLimit, apiKey, undefined, acceptLanguage).catch(e => ({ error: String(e) })),
+    makeRequest(ENDPOINTS.modelUsage, apiKey, timeParams, acceptLanguage).catch(e => ({ error: String(e) })),
+    makeRequest(ENDPOINTS.toolUsage, apiKey, timeParams, acceptLanguage).catch(e => ({ error: String(e) })),
   ]);
 
   return {

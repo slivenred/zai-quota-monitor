@@ -75,6 +75,22 @@
           "default": true,
           "description": "Show reset countdown in status bar text",
           "order": 3
+        },
+        "zaiQuota.language": {
+          "type": "string",
+          "default": "en",
+          "enum": [
+            "en",
+            "zh-CN",
+            "zh-TW"
+          ],
+          "enumDescriptions": [
+            "English",
+            "Simplified Chinese",
+            "Traditional Chinese"
+          ],
+          "description": "Display language for Z.ai Quota Monitor UI",
+          "order": 4
         }
       }
     }

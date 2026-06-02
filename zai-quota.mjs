@@ -1,23 +1,23 @@
 #!/usr/bin/env node
 
 /**
- * Z.ai Quota Monitor — 獨立查詢腳本
+ * Z.ai Quota Monitor - standalone query script
  *
- * 查詢 Z.ai GLM Coding Plan 的配額使用狀況、模型使用量、MCP 工具使用量，
- * 並顯示配額重置倒數時間。
+ * Queries Z.ai GLM Coding Plan quota, model usage, MCP tool usage,
+ * and reset countdown.
  *
- * 用法：
- *   node zai-quota.mjs                    # 使用 ZAI_API_KEY 環境變數
- *   ZAI_API_KEY=xxx node zai-quota.mjs    # 內聯提供 API Key
- *   node zai-quota.mjs --key YOUR_KEY     # 命令列參數
+ * Usage:
+ *   node zai-quota.mjs                    # Use ZAI_API_KEY environment variable
+ *   ZAI_API_KEY=xxx node zai-quota.mjs    # Provide API key inline
+ *   node zai-quota.mjs --key YOUR_KEY     # Provide API key as a CLI argument
  *
- * 無需安裝任何依賴 — 僅使用 Node.js 內建模組。
+ * No dependencies required - only Node.js built-in modules.
  */
 
 import https from 'node:https';
 
 // ============================================================================
-// 常量
+// Constants
 // ============================================================================
 
 const API_BASE = 'https://api.z.ai';
@@ -31,18 +31,18 @@ const REQUEST_TIMEOUT_MS = 15000;
 const PROGRESS_WIDTH = 12;
 
 // ============================================================================
-// 工具函數
+// Helpers
 // ============================================================================
 
 /**
- * 格式化數字（千位分隔符）
+ * Format number with thousand separators.
  */
 function fmtNum(n) {
   return n.toLocaleString('en-US');
 }
 
 /**
- * 格式化日期為 yyyy-MM-dd HH:mm:ss
+ * Format date as yyyy-MM-dd HH:mm:ss.
  */
 function fmtDate(d) {
   const pad = (n) => String(n).padStart(2, '0');
@@ -50,7 +50,7 @@ function fmtDate(d) {
 }
 
 /**
- * 建立進度條
+ * Build progress bar.
  */
 function progressBar(pct) {
   const clamped = Math.min(100, Math.max(0, pct));
@@ -60,7 +60,7 @@ function progressBar(pct) {
 }
 
 /**
- * 格式化重置倒數
+ * Format reset countdown.
  */
 function fmtResetCountdown(resetTimeMs) {
   if (!resetTimeMs || typeof resetTimeMs !== 'number') return null;
@@ -79,7 +79,7 @@ function fmtResetCountdown(resetTimeMs) {
 }
 
 /**
- * 計算 24 小時滾動時間窗口
+ * Calculate 24-hour rolling time window.
  */
 function getTimeWindow() {
   const now = new Date();
@@ -93,24 +93,24 @@ function getTimeWindow() {
 }
 
 /**
- * 取得 API Key
+ * Get API key.
  */
 function getApiKey() {
-  // 1. 命令列 --key 參數
+  // 1. --key CLI argument
   const keyIdx = process.argv.indexOf('--key');
   if (keyIdx !== -1 && process.argv[keyIdx + 1]) {
     return process.argv[keyIdx + 1];
   }
-  // 2. 環境變數
+  // 2. Environment variables
   return process.env.ZAI_API_KEY || process.env.ZHIPU_API_KEY || null;
 }
 
 // ============================================================================
-// API 請求
+// API Requests
 // ============================================================================
 
 /**
- * 發送 HTTPS GET 請求
+ * Send HTTPS GET request.
  */
 function makeRequest(url, authToken, queryParams) {
   return new Promise((resolve, reject) => {
@@ -123,7 +123,7 @@ function makeRequest(url, authToken, queryParams) {
       path: fullPath,
       method: 'GET',
       headers: {
-        'Authorization': authToken,  // 注意：不加 "Bearer" 前綴
+        'Authorization': authToken,  // Z.ai expects no "Bearer" prefix.
         'Accept-Language': 'en-US,en',
         'Content-Type': 'application/json',
       },
@@ -156,7 +156,7 @@ function makeRequest(url, authToken, queryParams) {
 }
 
 /**
- * 查詢所有 API 端點
+ * Query all API endpoints.
  */
 async function queryAll(apiKey) {
   const { queryParams, startTime, endTime } = getTimeWindow();
@@ -171,7 +171,7 @@ async function queryAll(apiKey) {
 }
 
 // ============================================================================
-// 輸出格式化
+// Output Formatting
 // ============================================================================
 
 function formatResetTime(resetTimeMs) {
@@ -181,8 +181,8 @@ function formatResetTime(resetTimeMs) {
 }
 
 function displayResults({ quotaRes, modelRes, toolRes, startTime, endTime }) {
-  const W = 66; // 總寬度
-  const inner = W - 4; // 內容寬度
+  const W = 66; // Total width
+  const inner = W - 4; // Content width
   const line = (s) => `║ ${String(s).padEnd(inner)} ║`;
   const separator = `╟${'─'.repeat(W - 2)}╢`;
   const divider = `╠${'═'.repeat(W - 2)}╣`;
@@ -207,18 +207,18 @@ function displayResults({ quotaRes, modelRes, toolRes, startTime, endTime }) {
     for (const limit of quotaData.limits) {
       const pct = typeof limit.percentage === 'number' ? limit.percentage : 0;
 
-      // 類型標籤
+      // Type label
       let label = limit.type || 'Unknown';
       if (label === 'TOKENS_LIMIT') label = 'Token usage (5 Hour)';
       if (label === 'TIME_LIMIT') label = 'MCP usage (1 Month)';
       if (limit.periodType === 'WEEKLY') label = 'Token usage (Weekly)';
 
-      // 進度條
+      // Progress bar
       const bar = `[${progressBar(pct)}] ${pct.toFixed(1)}%`;
       console.log(line(`${label}:`));
       console.log(line(`  ${bar}`));
 
-      // 重置倒數
+      // Reset countdown
       if (limit.nextResetTime) {
         const countdown = fmtResetCountdown(limit.nextResetTime);
         const exactTime = formatResetTime(limit.nextResetTime);
@@ -226,13 +226,13 @@ function displayResults({ quotaRes, modelRes, toolRes, startTime, endTime }) {
         if (exactTime) console.log(line(`  Reset at: ${exactTime}`));
       }
 
-      // MCP 用量明細
+      // MCP usage details
       if (limit.currentValue !== undefined && limit.total !== undefined) {
         console.log(line(`  Used: ${limit.currentValue} / ${limit.total}`));
       }
     }
 
-    // 額外顯示帳戶方案（如有）
+    // Show account plan when available.
     if (quotaData.planName) {
       console.log(separator);
       console.log(line(`Plan: ${quotaData.planName}`));
@@ -290,7 +290,7 @@ function displayResults({ quotaRes, modelRes, toolRes, startTime, endTime }) {
 }
 
 // ============================================================================
-// 主程式
+// Main
 // ============================================================================
 
 async function main() {
@@ -298,17 +298,17 @@ async function main() {
 
   if (!apiKey) {
     console.error('');
-    console.error('未找到 Z.ai API Key');
+    console.error('Z.ai API key was not found.');
     console.error('');
-    console.error('請使用以下任一方式提供 API Key：');
+    console.error('Provide an API key using one of these methods:');
     console.error('');
-    console.error('  1. 設定環境變數：');
+    console.error('  1. Set an environment variable:');
     console.error('     export ZAI_API_KEY="your-api-key"');
     console.error('');
-    console.error('  2. 命令列參數：');
+    console.error('  2. Use a CLI argument:');
     console.error('     node zai-quota.mjs --key YOUR_KEY');
     console.error('');
-    console.error('API Key 可從 https://z.ai/manage-apikey 取得');
+    console.error('Get an API key from https://z.ai/manage-apikey');
     console.error('');
     process.exit(1);
   }
