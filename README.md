@@ -2,6 +2,10 @@
 
 Language: **English** | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md)
 
+<p align="center">
+  <img src="media/readme-hero.jpg" alt="Z.ai Quota Monitor preview" width="100%">
+</p>
+
 A VS Code extension that monitors Z.ai GLM Coding Plan quota and shows a clean status bar overview with usage percentage and reset countdown.
 
 ## Features

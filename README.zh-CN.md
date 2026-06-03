@@ -2,6 +2,10 @@
 
 语言：[English](README.md) | **简体中文** | [繁體中文](README.zh-TW.md)
 
+<p align="center">
+  <img src="media/readme-hero.jpg" alt="Z.ai Quota Monitor preview" width="100%">
+</p>
+
 这是一个 VS Code 扩展，用来监控 Z.ai GLM Coding Plan 配额，并在状态栏显示清晰的用量百分比与重置倒计时。
 
 ## 功能

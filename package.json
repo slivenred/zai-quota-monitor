@@ -4,6 +4,7 @@
   "description": "Monitor Z.ai GLM Coding Plan quota with a refined status bar overview and reset countdown",
   "version": "1.0.0",
   "publisher": "slivenred",
+  "icon": "media/icon.png",
   "license": "MIT",
   "repository": {
     "type": "git",

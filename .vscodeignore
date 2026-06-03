@@ -6,3 +6,6 @@ node_modules/**
 tsconfig.json
 **/*.map
 **/*.ts
+media/*-source-image2.png
+media/logo.png
+media/social-preview.*
