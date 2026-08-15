@@ -24,7 +24,7 @@ A VS Code extension that monitors Z.ai GLM Coding Plan quota and shows a clean s
 
 ### Install from VSIX
 
-1. Download `zai-quota-monitor-1.0.0.vsix`
+1. Download the latest `.vsix` from [GitHub Releases](https://github.com/slivenred/zai-quota-monitor/releases)
 2. In VS Code, run `Extensions: Install from VSIX...`
 3. Select the downloaded `.vsix` file
 
@@ -65,9 +65,10 @@ npm run package
 
 ## Standalone Script
 
-If you do not want to install the extension, you can also use the standalone script:
+If you do not want to install the extension, you can also use the standalone script. It shares the compiled API client with the extension, so build it once first:
 
 ```bash
+npm install && npm run compile
 export ZAI_API_KEY="your-api-key"
 node zai-quota.mjs
 ```

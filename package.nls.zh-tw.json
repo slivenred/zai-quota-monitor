@@ -1,0 +1,15 @@
+{
+  "zaiQuota.category": "Z.ai 配額",
+  "zaiQuota.command.refresh": "重新整理用量",
+  "zaiQuota.command.configure": "設定監控器",
+  "zaiQuota.command.showDetail": "開啟用量總覽",
+  "zaiQuota.command.debugRaw": "偵錯：開啟原始 API 回應",
+  "zaiQuota.config.title": "Z.ai Quota Monitor",
+  "zaiQuota.config.refreshInterval": "自動重新整理間隔（分鐘）",
+  "zaiQuota.config.warnThreshold": "狀態列警示顏色的百分比門檻",
+  "zaiQuota.config.showCountdown": "在狀態列文字中顯示重設倒數",
+  "zaiQuota.config.language": "Z.ai Quota Monitor 介面顯示語言",
+  "zaiQuota.language.en": "英文",
+  "zaiQuota.language.zhCN": "簡體中文",
+  "zaiQuota.language.zhTW": "繁體中文"
+}

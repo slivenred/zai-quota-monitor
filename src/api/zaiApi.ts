@@ -7,6 +7,10 @@
  * - /api/monitor/usage/tool-usage     → MCP tool counts (24h window)
  *
  * Zero runtime dependencies — uses Node.js built-in https module.
+ *
+ * The API key is sent verbatim in the Authorization header (Z.ai expects
+ * no "Bearer" prefix). Failures reject with ZaiApiError so callers can
+ * distinguish auth / timeout / network / HTTP problems.
  */
 
 import * as https from 'node:https';
@@ -15,6 +19,7 @@ import type {
   ApiModelUsageResponse,
   ApiToolUsageResponse,
   ApiQuotaLimitItem,
+  EndpointError,
   QuotaLimit,
   ModelUsage,
   ToolUsage,
@@ -27,6 +32,8 @@ import type {
 
 const API_BASE = 'https://api.z.ai';
 const REQUEST_TIMEOUT_MS = 15000;
+/** Hard wall-clock deadline so a stalled response can never hang a request. */
+const REQUEST_DEADLINE_MS = REQUEST_TIMEOUT_MS + 5000;
 const DEFAULT_ACCEPT_LANGUAGE = 'en-US,en;q=0.9';
 
 const ENDPOINTS = {
@@ -34,6 +41,45 @@ const ENDPOINTS = {
   modelUsage: `${API_BASE}/api/monitor/usage/model-usage`,
   toolUsage: `${API_BASE}/api/monitor/usage/tool-usage`,
 } as const;
+
+// ============================================================================
+// Errors
+// ============================================================================
+
+export type ApiErrorKind = 'auth' | 'http' | 'network' | 'timeout' | 'parse';
+
+export class ZaiApiError extends Error {
+  constructor(
+    readonly kind: ApiErrorKind,
+    message: string,
+    readonly statusCode?: number,
+  ) {
+    super(message);
+    this.name = 'ZaiApiError';
+  }
+}
+
+/** Normalize any thrown value into a ZaiApiError. */
+function toApiError(err: unknown): ZaiApiError {
+  if (err instanceof ZaiApiError) return err;
+  const message = err instanceof Error ? err.message : String(err);
+  if (/timed?[\s-]?out/i.test(message)) {
+    return new ZaiApiError('timeout', message);
+  }
+  return new ZaiApiError('network', message);
+}
+
+/** Pick the most actionable error when every endpoint failed. */
+export function selectError(errors: unknown[]): ZaiApiError {
+  const zaiErrors = errors
+    .map((e) => toApiError(e))
+    .filter((e): e is ZaiApiError => e instanceof ZaiApiError);
+  return (
+    zaiErrors.find((e) => e.kind === 'auth') ??
+    zaiErrors[0] ??
+    new ZaiApiError('network', 'All API requests failed.')
+  );
+}
 
 // ============================================================================
 // Helpers
@@ -46,18 +92,19 @@ function fmtDate(d: Date): string {
     `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-/** Build 24-hour rolling time window query params */
-function buildTimeWindowParams(): string {
-  const now = new Date();
-  const start = new Date(
-    now.getFullYear(), now.getMonth(), now.getDate() - 1,
-    now.getHours(), 0, 0, 0
-  );
-  const end = new Date(
-    now.getFullYear(), now.getMonth(), now.getDate(),
-    now.getHours(), 59, 59, 999
-  );
-  return `startTime=${encodeURIComponent(fmtDate(start))}&endTime=${encodeURIComponent(fmtDate(end))}`;
+/** Build an exact 24-hour rolling time window ending now */
+export function buildTimeWindow(): { start: Date; end: Date; params: string } {
+  const end = new Date();
+  const start = new Date(end.getTime() - 24 * 60 * 60 * 1000);
+  return {
+    start,
+    end,
+    params: `startTime=${encodeURIComponent(fmtDate(start))}&endTime=${encodeURIComponent(fmtDate(end))}`,
+  };
+}
+
+export function buildTimeWindowParams(): string {
+  return buildTimeWindow().params;
 }
 
 /** Make an HTTPS GET request and return parsed JSON */
@@ -85,28 +132,56 @@ function makeRequest(
       },
     };
 
+    // Guarantee the promise settles exactly once, even if several error
+    // paths fire for the same request (socket error + abort + deadline...).
+    let settled = false;
+    let deadline: NodeJS.Timeout | undefined;
+    const settle = (win: boolean, value: unknown): void => {
+      if (settled) return;
+      settled = true;
+      if (deadline !== undefined) clearTimeout(deadline);
+      if (win) resolve(value);
+      else reject(value);
+    };
+
     const req = https.request(options, (res) => {
       let data = '';
       res.on('data', (chunk: Buffer) => { data += chunk; });
+      res.on('error', (err: Error) => {
+        req.destroy();
+        settle(false, toApiError(err));
+      });
       res.on('end', () => {
         if (res.statusCode !== 200) {
-          reject(new Error(`HTTP ${res.statusCode}: ${data.substring(0, 200)}`));
+          const kind = res.statusCode === 401 || res.statusCode === 403 ? 'auth' : 'http';
+          settle(false, new ZaiApiError(
+            kind,
+            `HTTP ${res.statusCode}: ${data.substring(0, 200)}`,
+            res.statusCode,
+          ));
           return;
         }
         try {
-          resolve(JSON.parse(data));
+          settle(true, JSON.parse(data));
         } catch {
-          reject(new Error(`Invalid JSON response`));
+          settle(false, new ZaiApiError('parse', 'Invalid JSON response'));
         }
       });
     });
 
+    // Inactivity timeout (no data for 15s)
     req.setTimeout(REQUEST_TIMEOUT_MS);
     req.on('timeout', () => {
       req.destroy();
-      reject(new Error('Request timed out'));
+      settle(false, new ZaiApiError('timeout', 'Request timed out'));
     });
-    req.on('error', (err: Error) => reject(err));
+    // Hard wall-clock deadline — covers a premature close where neither
+    // 'end' nor 'error' ever fires.
+    deadline = setTimeout(() => {
+      req.destroy();
+      settle(false, new ZaiApiError('timeout', 'Request timed out'));
+    }, REQUEST_DEADLINE_MS);
+    req.on('error', (err: Error) => settle(false, toApiError(err)));
     req.end();
   });
 }
@@ -116,7 +191,7 @@ function makeRequest(
 // ============================================================================
 
 /** Classify a raw quota limit item into a labeled QuotaLimit */
-function classifyLimit(item: ApiQuotaLimitItem): QuotaLimit {
+export function classifyLimit(item: ApiQuotaLimitItem): QuotaLimit {
   let label: QuotaLimit['type'];
   let displayLabel: string;
 
@@ -185,6 +260,7 @@ function processResponses(
     toolUsage,
     planName: quotaRes?.data?.planName as string | undefined,
     fetchedAt: new Date(),
+    endpointErrors: [],
   };
 }
 
@@ -192,34 +268,58 @@ function processResponses(
 // Public API
 // ============================================================================
 
+type EndpointResult =
+  | { ok: true; value: unknown }
+  | { ok: false; error: unknown };
+
+function toResult(p: Promise<unknown>): Promise<EndpointResult> {
+  return p.then(
+    (value): EndpointResult => ({ ok: true, value }),
+    (error): EndpointResult => ({ ok: false, error }),
+  );
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 /**
  * Fetch all usage data from Z.ai.
  *
- * Tries direct token auth first; on 401, falls back to Bearer format.
- * Individual endpoint failures are caught gracefully — only partial data is returned.
+ * The API key is sent verbatim in the Authorization header. Individual
+ * endpoint failures are caught gracefully — partial data is returned with
+ * the failed endpoints listed in `endpointErrors`. Only when every endpoint
+ * fails does this throw (a ZaiApiError whose kind distinguishes auth,
+ * timeout, network, and HTTP failures).
  */
 export async function fetchUsage(apiKey: string, acceptLanguage = DEFAULT_ACCEPT_LANGUAGE): Promise<UsageData> {
   const timeParams = buildTimeWindowParams();
 
   // Fire all three requests in parallel; catch individually
-  const [quotaRes, modelRes, toolRes] = await Promise.all([
-    makeRequest(ENDPOINTS.quotaLimit, apiKey, undefined, acceptLanguage)
-      .then(r => r as ApiQuotaResponse)
-      .catch(() => null),
-    makeRequest(ENDPOINTS.modelUsage, apiKey, timeParams, acceptLanguage)
-      .then(r => r as ApiModelUsageResponse)
-      .catch(() => null),
-    makeRequest(ENDPOINTS.toolUsage, apiKey, timeParams, acceptLanguage)
-      .then(r => r as ApiToolUsageResponse)
-      .catch(() => null),
+  const [quotaR, modelR, toolR] = await Promise.all([
+    toResult(makeRequest(ENDPOINTS.quotaLimit, apiKey, undefined, acceptLanguage)),
+    toResult(makeRequest(ENDPOINTS.modelUsage, apiKey, timeParams, acceptLanguage)),
+    toResult(makeRequest(ENDPOINTS.toolUsage, apiKey, timeParams, acceptLanguage)),
   ]);
 
-  // If all three failed, the API key is likely invalid
-  if (!quotaRes && !modelRes && !toolRes) {
-    throw new Error('All API requests failed. Please check your API key.');
+  // If all three failed, surface the most actionable cause
+  if (!quotaR.ok && !modelR.ok && !toolR.ok) {
+    throw selectError([quotaR.error, modelR.error, toolR.error]);
   }
 
-  return processResponses(quotaRes, modelRes, toolRes);
+  const endpointErrors: EndpointError[] = [];
+  if (!quotaR.ok) endpointErrors.push({ endpoint: 'quotaLimit', message: errorMessage(quotaR.error) });
+  if (!modelR.ok) endpointErrors.push({ endpoint: 'modelUsage', message: errorMessage(modelR.error) });
+  if (!toolR.ok) endpointErrors.push({ endpoint: 'toolUsage', message: errorMessage(toolR.error) });
+
+  return {
+    ...processResponses(
+      quotaR.ok ? (quotaR.value as ApiQuotaResponse) : null,
+      modelR.ok ? (modelR.value as ApiModelUsageResponse) : null,
+      toolR.ok ? (toolR.value as ApiToolUsageResponse) : null,
+    ),
+    endpointErrors,
+  };
 }
 
 /**

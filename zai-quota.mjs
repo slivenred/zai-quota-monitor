@@ -3,32 +3,33 @@
 /**
  * Z.ai Quota Monitor - standalone query script
  *
- * Queries Z.ai GLM Coding Plan quota, model usage, MCP tool usage,
- * and reset countdown.
+ * Shares the compiled API client with the extension (out/api/zaiApi.js),
+ * so endpoints, auth handling, error classification, and the 24-hour usage
+ * window can never drift between the two. Build once before use:
+ *
+ *   npm install && npm run compile
  *
  * Usage:
  *   node zai-quota.mjs                    # Use ZAI_API_KEY environment variable
  *   ZAI_API_KEY=xxx node zai-quota.mjs    # Provide API key inline
  *   node zai-quota.mjs --key YOUR_KEY     # Provide API key as a CLI argument
  *
- * No dependencies required - only Node.js built-in modules.
+ * No runtime dependencies - only Node.js built-in modules.
  */
 
-import https from 'node:https';
-
-// ============================================================================
-// Constants
-// ============================================================================
-
-const API_BASE = 'https://api.z.ai';
-const ENDPOINTS = {
-  quotaLimit: `${API_BASE}/api/monitor/usage/quota/limit`,
-  modelUsage: `${API_BASE}/api/monitor/usage/model-usage`,
-  toolUsage:  `${API_BASE}/api/monitor/usage/tool-usage`,
-};
-
-const REQUEST_TIMEOUT_MS = 15000;
 const PROGRESS_WIDTH = 12;
+
+// Shared client lives in the compiled extension output. Import it lazily
+// so a missing build produces a friendly message instead of a stack trace.
+let fetchUsage;
+let buildTimeWindow;
+try {
+  ({ fetchUsage, buildTimeWindow } = await import('./out/api/zaiApi.js'));
+} catch {
+  console.error('Compiled extension output not found (out/api/zaiApi.js).');
+  console.error('Build it first:  npm install && npm run compile');
+  process.exit(1);
+}
 
 // ============================================================================
 // Helpers
@@ -62,9 +63,9 @@ function progressBar(pct) {
 /**
  * Format reset countdown.
  */
-function fmtResetCountdown(resetTimeMs) {
-  if (!resetTimeMs || typeof resetTimeMs !== 'number') return null;
-  const diff = resetTimeMs - Date.now();
+function fmtResetCountdown(resetTime) {
+  if (!resetTime) return null;
+  const diff = resetTime.getTime() - Date.now();
   if (diff <= 0) return null;
 
   const totalMin = Math.floor(diff / 60000);
@@ -76,20 +77,6 @@ function fmtResetCountdown(resetTimeMs) {
   const hrs = Math.floor(totalMin / 60);
   const mins = totalMin % 60;
   return `Resets in ${hrs} hours ${mins} minutes`;
-}
-
-/**
- * Calculate 24-hour rolling time window.
- */
-function getTimeWindow() {
-  const now = new Date();
-  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, now.getHours(), 0, 0, 0);
-  const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours(), 59, 59, 999);
-  return {
-    startTime: fmtDate(start),
-    endTime: fmtDate(end),
-    queryParams: `startTime=${encodeURIComponent(fmtDate(start))}&endTime=${encodeURIComponent(fmtDate(end))}`,
-  };
 }
 
 /**
@@ -106,136 +93,62 @@ function getApiKey() {
 }
 
 // ============================================================================
-// API Requests
-// ============================================================================
-
-/**
- * Send HTTPS GET request.
- */
-function makeRequest(url, authToken, queryParams) {
-  return new Promise((resolve, reject) => {
-    const parsed = new URL(url);
-    const fullPath = queryParams ? `${parsed.pathname}?${queryParams}` : parsed.pathname;
-
-    const options = {
-      hostname: parsed.hostname,
-      port: parsed.port ? Number(parsed.port) : 443,
-      path: fullPath,
-      method: 'GET',
-      headers: {
-        'Authorization': authToken,  // Z.ai expects no "Bearer" prefix.
-        'Accept-Language': 'en-US,en',
-        'Content-Type': 'application/json',
-      },
-    };
-
-    const req = https.request(options, (res) => {
-      let data = '';
-      res.on('data', (chunk) => { data += chunk; });
-      res.on('end', () => {
-        if (res.statusCode !== 200) {
-          reject(new Error(`HTTP ${res.statusCode}: ${data.substring(0, 200)}`));
-          return;
-        }
-        try {
-          resolve(JSON.parse(data));
-        } catch {
-          reject(new Error(`Invalid JSON response: ${data.substring(0, 200)}`));
-        }
-      });
-    });
-
-    req.setTimeout(REQUEST_TIMEOUT_MS);
-    req.on('timeout', () => {
-      req.destroy();
-      reject(new Error('Request timed out'));
-    });
-    req.on('error', (err) => reject(err));
-    req.end();
-  });
-}
-
-/**
- * Query all API endpoints.
- */
-async function queryAll(apiKey) {
-  const { queryParams, startTime, endTime } = getTimeWindow();
-
-  const [quotaRes, modelRes, toolRes] = await Promise.all([
-    makeRequest(ENDPOINTS.quotaLimit, apiKey).catch((e) => ({ error: e.message })),
-    makeRequest(ENDPOINTS.modelUsage, apiKey, queryParams).catch((e) => ({ error: e.message })),
-    makeRequest(ENDPOINTS.toolUsage, apiKey, queryParams).catch((e) => ({ error: e.message })),
-  ]);
-
-  return { quotaRes, modelRes, toolRes, startTime, endTime };
-}
-
-// ============================================================================
 // Output Formatting
 // ============================================================================
 
-function formatResetTime(resetTimeMs) {
-  if (!resetTimeMs || typeof resetTimeMs !== 'number') return '';
-  const d = new Date(resetTimeMs);
-  return fmtDate(d);
-}
-
-function displayResults({ quotaRes, modelRes, toolRes, startTime, endTime }) {
+function displayResults(data, window) {
   const W = 66; // Total width
   const inner = W - 4; // Content width
   const line = (s) => `║ ${String(s).padEnd(inner)} ║`;
   const separator = `╟${'─'.repeat(W - 2)}╢`;
   const divider = `╠${'═'.repeat(W - 2)}╣`;
 
+  const endpointError = (name) =>
+    data.endpointErrors.find((e) => e.endpoint === name)?.message;
+
   console.log(`╔${'═'.repeat(W - 2)}╗`);
   console.log(line(''));
   console.log(line('Z.ai GLM Coding Plan - Quota Monitor'));
   console.log(line(''));
   console.log(divider);
-  console.log(line(`Platform:  Z.AI (api.z.ai)`));
-  console.log(line(`Period:    ${startTime} → ${endTime}`));
+  console.log(line('Platform:  Z.AI (api.z.ai)'));
+  console.log(line(`Period:    ${fmtDate(window.start)} → ${fmtDate(window.end)}`));
   console.log(divider);
 
   // ── Quota Limits ──────────────────────────────────
   console.log(line('QUOTA LIMITS'));
   console.log(separator);
 
-  const quotaData = quotaRes?.data || quotaRes;
-  if (quotaRes?.error) {
-    console.log(line(`Error: ${quotaRes.error}`));
-  } else if (quotaData?.limits && Array.isArray(quotaData.limits)) {
-    for (const limit of quotaData.limits) {
-      const pct = typeof limit.percentage === 'number' ? limit.percentage : 0;
-
-      // Type label
-      let label = limit.type || 'Unknown';
-      if (label === 'TOKENS_LIMIT') label = 'Token usage (5 Hour)';
-      if (label === 'TIME_LIMIT') label = 'MCP usage (1 Month)';
-      if (limit.periodType === 'WEEKLY') label = 'Token usage (Weekly)';
-
-      // Progress bar
-      const bar = `[${progressBar(pct)}] ${pct.toFixed(1)}%`;
-      console.log(line(`${label}:`));
+  const quotaError = endpointError('quotaLimit');
+  if (quotaError) {
+    console.log(line(`Error: ${quotaError}`));
+  } else if (data.quotas.length > 0) {
+    for (const quota of data.quotas) {
+      const bar = `[${progressBar(quota.percentage)}] ${quota.percentage.toFixed(1)}%`;
+      console.log(line(`${quota.label}:`));
       console.log(line(`  ${bar}`));
 
-      // Reset countdown
-      if (limit.nextResetTime) {
-        const countdown = fmtResetCountdown(limit.nextResetTime);
-        const exactTime = formatResetTime(limit.nextResetTime);
+      if (quota.nextResetTime) {
+        const countdown = fmtResetCountdown(quota.nextResetTime);
         if (countdown) console.log(line(`  ${countdown}`));
-        if (exactTime) console.log(line(`  Reset at: ${exactTime}`));
+        console.log(line(`  Reset at: ${fmtDate(quota.nextResetTime)}`));
       }
 
-      // MCP usage details
-      if (limit.currentValue !== undefined && limit.total !== undefined) {
-        console.log(line(`  Used: ${limit.currentValue} / ${limit.total}`));
+      if (quota.currentValue !== undefined && quota.total !== undefined) {
+        console.log(line(`  Used: ${quota.currentValue} / ${quota.total}`));
+      }
+
+      if (quota.usageDetails && quota.usageDetails.length > 0) {
+        for (const d of quota.usageDetails) {
+          console.log(line(`  ${d.modelCode}: ${fmtNum(d.usage)}`));
+        }
       }
     }
 
     // Show account plan when available.
-    if (quotaData.planName) {
+    if (data.planName) {
       console.log(separator);
-      console.log(line(`Plan: ${quotaData.planName}`));
+      console.log(line(`Plan: ${data.planName}`));
     }
   } else {
     console.log(line('No quota data available'));
@@ -246,19 +159,14 @@ function displayResults({ quotaRes, modelRes, toolRes, startTime, endTime }) {
   console.log(line('MODEL USAGE (24h)'));
   console.log(separator);
 
-  const modelData = modelRes?.data || modelRes;
-  if (modelRes?.error) {
-    console.log(line(`Error: ${modelRes.error}`));
-  } else if (modelData?.totalUsage) {
-    const tu = modelData.totalUsage;
-    if (tu.totalTokensUsage !== undefined) {
-      const defaultLimit = 40000000;
-      const pctOf5h = Math.round((tu.totalTokensUsage / defaultLimit) * 100);
-      console.log(line(`Total Tokens:   ${fmtNum(tu.totalTokensUsage)} (~${pctOf5h}% of 5h limit)`));
-    }
-    if (tu.totalModelCallCount !== undefined) {
-      console.log(line(`Total Calls:    ${fmtNum(tu.totalModelCallCount)}`));
-    }
+  const modelError = endpointError('modelUsage');
+  if (modelError) {
+    console.log(line(`Error: ${modelError}`));
+  } else if (data.modelUsage) {
+    const defaultLimit = 40000000;
+    const pctOf5h = Math.round((data.modelUsage.totalTokens / defaultLimit) * 100);
+    console.log(line(`Total Tokens:   ${fmtNum(data.modelUsage.totalTokens)} (~${pctOf5h}% of 5h limit)`));
+    console.log(line(`Total Calls:    ${fmtNum(data.modelUsage.totalCalls)}`));
   } else {
     console.log(line('No model usage data'));
   }
@@ -268,20 +176,13 @@ function displayResults({ quotaRes, modelRes, toolRes, startTime, endTime }) {
   console.log(line('TOOL / MCP USAGE (24h)'));
   console.log(separator);
 
-  const toolData = toolRes?.data || toolRes;
-  if (toolRes?.error) {
-    console.log(line(`Error: ${toolRes.error}`));
-  } else if (toolData?.totalUsage) {
-    const tu = toolData.totalUsage;
-    if (tu.totalNetworkSearchCount !== undefined) {
-      console.log(line(`Network Searches:  ${fmtNum(tu.totalNetworkSearchCount)}`));
-    }
-    if (tu.totalWebReadMcpCount !== undefined) {
-      console.log(line(`Web Reads:         ${fmtNum(tu.totalWebReadMcpCount)}`));
-    }
-    if (tu.totalZreadMcpCount !== undefined) {
-      console.log(line(`ZRead Calls:       ${fmtNum(tu.totalZreadMcpCount)}`));
-    }
+  const toolError = endpointError('toolUsage');
+  if (toolError) {
+    console.log(line(`Error: ${toolError}`));
+  } else if (data.toolUsage) {
+    console.log(line(`Network Searches:  ${fmtNum(data.toolUsage.networkSearches)}`));
+    console.log(line(`Web Reads:         ${fmtNum(data.toolUsage.webReads)}`));
+    console.log(line(`ZRead Calls:       ${fmtNum(data.toolUsage.zreadCalls)}`));
   } else {
     console.log(line('No tool usage data'));
   }
@@ -314,8 +215,9 @@ async function main() {
   }
 
   try {
-    const results = await queryAll(apiKey);
-    displayResults(results);
+    const window = buildTimeWindow();
+    const data = await fetchUsage(apiKey);
+    displayResults(data, window);
   } catch (err) {
     console.error(`\nError: ${err.message}\n`);
     process.exit(1);

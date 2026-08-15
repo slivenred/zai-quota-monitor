@@ -6,7 +6,7 @@
  */
 
 import * as vscode from 'vscode';
-import { fetchUsage, fetchRawResponses } from './api/zaiApi';
+import { fetchUsage, fetchRawResponses, ZaiApiError } from './api/zaiApi';
 import {
   DEFAULT_LANGUAGE,
   LANGUAGE_VALUES,
@@ -15,6 +15,7 @@ import {
   getStrings,
   normalizeLanguage,
   type Language,
+  type LocaleStrings,
 } from './i18n';
 import { QuotaIndicator } from './statusBar/quotaIndicator';
 import type { UsageData, ExtensionConfig } from './types';
@@ -26,13 +27,27 @@ import type { UsageData, ExtensionConfig } from './types';
 let indicator: QuotaIndicator;
 let refreshTimer: ReturnType<typeof setInterval> | undefined;
 let lastData: UsageData | undefined;
-let outputChannel: vscode.OutputChannel;
+let outputChannel: vscode.LogOutputChannel;
 
-// Track notification states to avoid spamming
-let notifiedLowQuota = false;
-let notifiedExhausted = false;
+/** Guards against overlapping refreshes (manual + timer + retry). */
+let refreshInFlight: Promise<void> | undefined;
+
+/** Whether the most recent refresh succeeded (drives the stale-data ticker). */
+let lastRefreshOk = true;
+
+/** Latch so a persistent error only raises one toast per ok→error transition. */
+let errorNotified = false;
+
+/** Notification state per quota type, to avoid spamming. */
+const notificationState: Record<'token' | 'weekly', { low: boolean; exhausted: boolean }> = {
+  token: { low: false, exhausted: false },
+  weekly: { low: false, exhausted: false },
+};
 
 const SECRET_KEY = 'zaiApiKey';
+
+/** Re-render interval for the countdown display (no network involved). */
+const UI_TICKER_MS = 30_000;
 
 // ============================================================================
 // Helpers
@@ -40,27 +55,54 @@ const SECRET_KEY = 'zaiApiKey';
 
 function getConfig(): ExtensionConfig {
   const cfg = vscode.workspace.getConfiguration('zaiQuota');
+  // Clamp refreshInterval: settings.json can bypass the declared minimum,
+  // and 0/NaN would turn setInterval into a request storm.
+  const rawInterval = Number(cfg.get<number>('refreshInterval', 5));
   return {
-    refreshInterval: cfg.get<number>('refreshInterval', 5),
+    refreshInterval: Number.isFinite(rawInterval) && rawInterval >= 1 ? rawInterval : 5,
     warnThreshold: cfg.get<number>('warnThreshold', 85),
     showCountdown: cfg.get<boolean>('showCountdown', true),
     language: normalizeLanguage(cfg.get<Language>('language', DEFAULT_LANGUAGE)),
   };
 }
 
-function getSecretStorage(context: vscode.ExtensionContext): vscode.SecretStorage {
-  return context.secrets;
+async function getApiKey(context: vscode.ExtensionContext): Promise<string | undefined> {
+  return context.secrets.get(SECRET_KEY);
 }
 
-async function getApiKey(context: vscode.ExtensionContext): Promise<string | undefined> {
-  return getSecretStorage(context).get(SECRET_KEY);
+function resetNotificationState(): void {
+  notificationState.token = { low: false, exhausted: false };
+  notificationState.weekly = { low: false, exhausted: false };
+  errorNotified = false;
+}
+
+/** Re-render the status bar from cached state after a config change. */
+function renderCurrentState(context: vscode.ExtensionContext): void {
+  if (lastData && lastRefreshOk) {
+    indicator.updateUsage(lastData);
+  } else if (!lastData) {
+    void getApiKey(context).then((apiKey) => {
+      if (!apiKey) {
+        indicator.showNotConfigured();
+      }
+    });
+  }
+}
+
+/** Map an API failure to a localized, user-facing message. */
+function localizeApiError(err: unknown, strings: LocaleStrings): string {
+  if (err instanceof ZaiApiError) {
+    if (err.kind === 'auth') return strings.notifications.errorAuth;
+    if (err.kind === 'timeout') return strings.notifications.errorTimeout;
+  }
+  return strings.notifications.errorRequest;
 }
 
 // ============================================================================
 // Core Logic
 // ============================================================================
 
-async function refreshUsage(context: vscode.ExtensionContext): Promise<void> {
+async function doRefresh(context: vscode.ExtensionContext, options: { manual?: boolean } = {}): Promise<void> {
   const apiKey = await getApiKey(context);
   if (!apiKey) {
     indicator.showNotConfigured();
@@ -69,67 +111,99 @@ async function refreshUsage(context: vscode.ExtensionContext): Promise<void> {
 
   const config = getConfig();
   const strings = getStrings(config.language);
-  indicator.showLoading();
+  // Don't flash a loading state over data that is already on screen.
+  if (!lastData) {
+    indicator.showLoading();
+  }
 
   try {
     const data = await fetchUsage(apiKey, getAcceptLanguage(config.language));
     lastData = data;
+    lastRefreshOk = true;
+    errorNotified = false;
+    for (const e of data.endpointErrors) {
+      outputChannel.warn(`Partial data — endpoint ${e.endpoint} failed: ${e.message}`);
+    }
     indicator.updateUsage(data);
     checkNotifications(data);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    indicator.showError(msg);
+    const rawMsg = err instanceof Error ? err.message : String(err);
+    const msg = localizeApiError(err, strings);
+    lastRefreshOk = false;
+    outputChannel.error(`Refresh failed: ${rawMsg}`);
+    // Keep the last known usage visible when we have it.
+    indicator.showError(msg, lastData);
 
-    // Show actionable error notification
-    const action = await vscode.window.showErrorMessage(
-      `Z.ai Quota Monitor: ${msg}`,
-      strings.actions.openSettings,
-      strings.actions.retry,
-    );
-    if (action === strings.actions.openSettings) {
-      vscode.commands.executeCommand('zaiQuota.configure');
-    } else if (action === strings.actions.retry) {
-      refreshUsage(context);
+    // Only interrupt the user for manual refreshes or a fresh ok→error
+    // transition; background failures stay visible in the status bar.
+    if (options.manual || !errorNotified) {
+      errorNotified = true;
+      const action = await vscode.window.showErrorMessage(
+        `Z.ai Quota Monitor: ${msg}`,
+        strings.actions.openSettings,
+        strings.actions.retry,
+      );
+      if (action === strings.actions.openSettings) {
+        void vscode.commands.executeCommand('zaiQuota.configure');
+      } else if (action === strings.actions.retry) {
+        void doRefresh(context, { manual: true });
+      }
     }
   }
 }
 
+/** Refresh usage data; concurrent calls share the in-flight request. */
+function refreshUsage(context: vscode.ExtensionContext, options: { manual?: boolean } = {}): Promise<void> {
+  if (refreshInFlight) return refreshInFlight;
+  refreshInFlight = doRefresh(context, options).finally(() => {
+    refreshInFlight = undefined;
+  });
+  return refreshInFlight;
+}
+
 /** Check if we should show a notification about quota state changes */
 function checkNotifications(data: UsageData): void {
-  const tokenQuota = data.quotas.find(q => q.type === 'token');
-  if (!tokenQuota) return;
-
   const config = getConfig();
   const strings = getStrings(config.language);
-  const pct = tokenQuota.percentage;
+  const localeTag = getLocaleTag(config.language);
 
-  // Quota exhausted
-  if (pct >= 100 && !notifiedExhausted) {
-    notifiedExhausted = true;
-    notifiedLowQuota = true; // no need for low warning too
-    const resetInfo = tokenQuota.nextResetTime
-      ? strings.notifications.resetAt(tokenQuota.nextResetTime.toLocaleTimeString(getLocaleTag(config.language)))
+  for (const quota of data.quotas) {
+    if (quota.type !== 'token' && quota.type !== 'weekly') continue;
+    const isWeekly = quota.type === 'weekly';
+    const state = notificationState[quota.type];
+    const pct = quota.percentage;
+    const resetInfo = quota.nextResetTime
+      ? strings.notifications.resetAt(quota.nextResetTime.toLocaleTimeString(localeTag))
       : '';
-    vscode.window.showWarningMessage(strings.notifications.quotaExhausted(resetInfo));
-    return;
-  }
 
-  // Quota running low (< 15% remaining)
-  if (pct >= config.warnThreshold && pct < 100 && !notifiedLowQuota) {
-    notifiedLowQuota = true;
-    const resetInfo = tokenQuota.nextResetTime
-      ? strings.notifications.resetAt(tokenQuota.nextResetTime.toLocaleTimeString(getLocaleTag(config.language)))
-      : '';
-    vscode.window.showInformationMessage(
-      strings.notifications.quotaLow(pct.toFixed(0), resetInfo),
-    );
-    return;
-  }
+    // Quota exhausted
+    if (pct >= 100 && !state.exhausted) {
+      state.exhausted = true;
+      state.low = true; // no need for low warning too
+      vscode.window.showWarningMessage(
+        isWeekly
+          ? strings.notifications.quotaExhaustedWeekly(resetInfo)
+          : strings.notifications.quotaExhausted(resetInfo),
+      );
+      continue;
+    }
 
-  // Reset notification flags when quota is healthy
-  if (pct < config.warnThreshold) {
-    notifiedLowQuota = false;
-    notifiedExhausted = false;
+    // Quota running low
+    if (pct >= config.warnThreshold && pct < 100 && !state.low) {
+      state.low = true;
+      vscode.window.showInformationMessage(
+        isWeekly
+          ? strings.notifications.quotaLowWeekly(pct.toFixed(0), resetInfo)
+          : strings.notifications.quotaLow(pct.toFixed(0), resetInfo),
+      );
+      continue;
+    }
+
+    // Reset notification flags when quota is healthy
+    if (pct < config.warnThreshold) {
+      state.low = false;
+      state.exhausted = false;
+    }
   }
 }
 
@@ -137,7 +211,7 @@ function checkNotifications(data: UsageData): void {
 function startRefreshTimer(context: vscode.ExtensionContext): void {
   stopRefreshTimer();
   const config = getConfig();
-  refreshTimer = setInterval(() => refreshUsage(context), config.refreshInterval * 60_000);
+  refreshTimer = setInterval(() => void refreshUsage(context), config.refreshInterval * 60_000);
 }
 
 function stopRefreshTimer(): void {
@@ -153,7 +227,7 @@ function stopRefreshTimer(): void {
 
 async function configureSettings(context: vscode.ExtensionContext): Promise<void> {
   type SettingsItem = vscode.QuickPickItem & {
-    action: 'apiKey' | 'refreshInterval' | 'warnThreshold' | 'language';
+    action: 'apiKey' | 'clearApiKey' | 'refreshInterval' | 'warnThreshold' | 'language';
   };
 
   const currentConfig = getConfig();
@@ -164,6 +238,12 @@ async function configureSettings(context: vscode.ExtensionContext): Promise<void
       description: strings.configure.apiKeyDescription,
       detail: strings.configure.apiKeyDetail,
       action: 'apiKey',
+    },
+    {
+      label: strings.configure.clearApiKeyLabel,
+      description: strings.configure.clearApiKeyDescription,
+      detail: strings.configure.clearApiKeyDetail,
+      action: 'clearApiKey',
     },
     {
       label: strings.configure.refreshIntervalLabel,
@@ -199,7 +279,7 @@ async function configureSettings(context: vscode.ExtensionContext): Promise<void
       strings.configure.enterApiKey,
     );
     if (open === strings.configure.openApiKeyPage) {
-      vscode.env.openExternal(vscode.Uri.parse('https://z.ai/manage-apikey'));
+      void vscode.env.openExternal(vscode.Uri.parse('https://z.ai/manage-apikey'));
     }
 
     const key = await vscode.window.showInputBox({
@@ -214,11 +294,22 @@ async function configureSettings(context: vscode.ExtensionContext): Promise<void
     });
 
     if (key) {
-      await getSecretStorage(context).store(SECRET_KEY, key.trim());
+      await context.secrets.store(SECRET_KEY, key.trim());
       vscode.window.showInformationMessage(strings.configure.apiKeyStored);
-      notifiedLowQuota = false;
-      notifiedExhausted = false;
-      refreshUsage(context);
+      // The secrets.onDidChange listener reacts by refreshing and
+      // (re)starting the auto-refresh timer.
+    }
+  } else if (selected.action === 'clearApiKey') {
+    const confirm = await vscode.window.showWarningMessage(
+      strings.configure.clearApiKeyConfirm,
+      strings.configure.clearApiKeyConfirmYes,
+      strings.configure.clearApiKeyConfirmNo,
+    );
+    if (confirm === strings.configure.clearApiKeyConfirmYes) {
+      await context.secrets.delete(SECRET_KEY);
+      vscode.window.showInformationMessage(strings.notifications.apiKeyCleared);
+      // The secrets.onDidChange listener reacts by stopping the timer and
+      // resetting the status bar.
     }
   } else if (selected.action === 'refreshInterval') {
     const config = vscode.workspace.getConfiguration('zaiQuota');
@@ -268,11 +359,7 @@ async function configureSettings(context: vscode.ExtensionContext): Promise<void
       const nextStrings = getStrings(language.language);
       vscode.window.showInformationMessage(nextStrings.configure.languageChanged(nextStrings.languageOptions[language.language].label));
       indicator.updateConfig(getConfig());
-      if (lastData) {
-        indicator.updateUsage(lastData);
-      } else {
-        indicator.showNotConfigured();
-      }
+      renderCurrentState(context);
     }
   }
 }
@@ -285,13 +372,13 @@ async function showDetail(context: vscode.ExtensionContext): Promise<void> {
     return;
   }
 
+  // Serve cached data only when reasonably fresh
+  const maxAgeMs = Math.max(getConfig().refreshInterval, 5) * 60_000 * 2;
+  if (!lastData || Date.now() - lastData.fetchedAt.getTime() > maxAgeMs) {
+    await refreshUsage(context, { manual: true });
+  }
   if (lastData) {
     await indicator.showQuickPick(lastData);
-  } else {
-    await refreshUsage(context);
-    if (lastData) {
-      await indicator.showQuickPick(lastData);
-    }
   }
 }
 
@@ -321,13 +408,33 @@ async function debugRaw(context: vscode.ExtensionContext): Promise<void> {
 // Extension Activate / Deactivate
 // ============================================================================
 
-export async function activate(context: vscode.ExtensionContext): Promise<void> {
-  outputChannel = vscode.window.createOutputChannel('Z.ai Quota Debug');
+/** Async initialization — kept out of activate() so activation never blocks. */
+async function initialize(context: vscode.ExtensionContext): Promise<void> {
+  const apiKey = await getApiKey(context);
+  if (!apiKey) {
+    indicator.showNotConfigured();
+    const strings = getStrings(getConfig().language);
+    // Prompt to configure on first run
+    const action = await vscode.window.showInformationMessage(
+      strings.notifications.firstRunPrompt,
+      strings.notifications.configureApiKey,
+    );
+    if (action === strings.notifications.configureApiKey) {
+      void vscode.commands.executeCommand('zaiQuota.configure');
+    }
+  } else {
+    await refreshUsage(context);
+    startRefreshTimer(context);
+  }
+}
+
+export function activate(context: vscode.ExtensionContext): void {
+  outputChannel = vscode.window.createOutputChannel('Z.ai Quota Monitor', { log: true });
   indicator = new QuotaIndicator(getConfig());
 
   // Register commands
   context.subscriptions.push(
-    vscode.commands.registerCommand('zaiQuota.refresh', () => refreshUsage(context)),
+    vscode.commands.registerCommand('zaiQuota.refresh', () => void refreshUsage(context, { manual: true })),
     vscode.commands.registerCommand('zaiQuota.configure', () => configureSettings(context)),
     vscode.commands.registerCommand('zaiQuota.showDetail', () => showDetail(context)),
     vscode.commands.registerCommand('zaiQuota.debugRaw', () => debugRaw(context)),
@@ -339,41 +446,45 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (e.affectsConfiguration('zaiQuota')) {
         indicator.updateConfig(getConfig());
         startRefreshTimer(context);
-        // Re-render with existing data if available
-        if (lastData) {
-          indicator.updateUsage(lastData);
-        } else {
-          void getApiKey(context).then((apiKey) => {
-            if (!apiKey) {
-              indicator.showNotConfigured();
-            }
-          });
-        }
+        renderCurrentState(context);
       }
     }),
   );
+
+  // React to API key changes (own window or another one): this is what
+  // (re)starts monitoring after the first-run key setup.
+  context.subscriptions.push(
+    context.secrets.onDidChange((e) => {
+      if (e.key !== SECRET_KEY) return;
+      void getApiKey(context).then((apiKey) => {
+        resetNotificationState();
+        if (apiKey) {
+          void refreshUsage(context);
+          startRefreshTimer(context);
+        } else {
+          stopRefreshTimer();
+          lastData = undefined;
+          lastRefreshOk = true;
+          indicator.showNotConfigured();
+        }
+      });
+    }),
+  );
+
+  // Local re-render ticker: keeps the countdown and "last updated" age
+  // accurate between network refreshes (no requests involved).
+  const ticker = setInterval(() => {
+    if (lastData && lastRefreshOk) {
+      indicator.updateUsage(lastData);
+    }
+  }, UI_TICKER_MS);
+  context.subscriptions.push({ dispose: () => clearInterval(ticker) });
 
   // Dispose on deactivate
   context.subscriptions.push(indicator);
   context.subscriptions.push(outputChannel);
 
-  // Check if API key exists and initialize
-  const apiKey = await getApiKey(context);
-  if (!apiKey) {
-    indicator.showNotConfigured();
-    const strings = getStrings(getConfig().language);
-    // Prompt to configure on first run
-    const action = await vscode.window.showInformationMessage(
-      strings.notifications.firstRunPrompt,
-      strings.notifications.configureApiKey,
-    );
-    if (action === strings.notifications.configureApiKey) {
-      vscode.commands.executeCommand('zaiQuota.configure');
-    }
-  } else {
-    await refreshUsage(context);
-    startRefreshTimer(context);
-  }
+  void initialize(context);
 }
 
 export function deactivate(): void {

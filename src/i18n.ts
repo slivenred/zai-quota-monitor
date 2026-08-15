@@ -22,16 +22,28 @@ export interface LocaleStrings {
     resetAt: (time: string) => string;
     quotaExhausted: (resetInfo: string) => string;
     quotaLow: (percentage: string, resetInfo: string) => string;
+    quotaExhaustedWeekly: (resetInfo: string) => string;
+    quotaLowWeekly: (percentage: string, resetInfo: string) => string;
     firstRunPrompt: string;
     configureApiKey: string;
     debugRequiresApiKey: string;
     rawFetchFailed: (message: string) => string;
+    errorAuth: string;
+    errorTimeout: string;
+    errorRequest: string;
+    apiKeyCleared: string;
   };
   configure: {
     placeholder: string;
     apiKeyLabel: string;
     apiKeyDescription: string;
     apiKeyDetail: string;
+    clearApiKeyLabel: string;
+    clearApiKeyDescription: string;
+    clearApiKeyDetail: string;
+    clearApiKeyConfirm: string;
+    clearApiKeyConfirmYes: string;
+    clearApiKeyConfirmNo: string;
     refreshIntervalLabel: string;
     refreshIntervalDescription: string;
     refreshIntervalDetail: string;
@@ -62,6 +74,7 @@ export interface LocaleStrings {
     errorText: string;
     errorTooltip: (message: string) => string;
     exhaustedText: string;
+    noDataText: string;
   };
   quota: {
     token5h: string;
@@ -83,6 +96,9 @@ export interface LocaleStrings {
     daysHours: (days: number, hours: number) => string;
     hoursMinutes: (hours: number, minutes: number) => string;
     minutes: (minutes: number) => string;
+    compactDaysHours: (days: number, hours: number) => string;
+    compactHoursMinutes: (hours: number, minutes: number) => string;
+    compactMinutes: (minutes: number) => string;
   };
   tooltip: {
     activity24h: string;
@@ -95,6 +111,7 @@ export interface LocaleStrings {
     noUsageRecord: string;
     connectedAgo: (minutes: number) => string;
     openOverview: string;
+    partialData: (failed: number, total: number) => string;
   };
   quickPick: {
     quotaStatus: string;
@@ -135,16 +152,28 @@ export const STRINGS: Record<Language, LocaleStrings> = {
       resetAt: (time) => `, resets at ${time}`,
       quotaExhausted: (resetInfo) => `Z.ai Quota Monitor: 5-hour quota is exhausted${resetInfo}.`,
       quotaLow: (percentage, resetInfo) => `Z.ai Quota Monitor: 5-hour quota has reached ${percentage}%${resetInfo}.`,
+      quotaExhaustedWeekly: (resetInfo) => `Z.ai Quota Monitor: weekly quota is exhausted${resetInfo}.`,
+      quotaLowWeekly: (percentage, resetInfo) => `Z.ai Quota Monitor: weekly quota has reached ${percentage}%${resetInfo}.`,
       firstRunPrompt: 'Z.ai Quota Monitor needs an API key to enable quota monitoring.',
       configureApiKey: 'Set API Key',
       debugRequiresApiKey: 'Please set an API key first.',
       rawFetchFailed: (message) => `Z.ai Quota Monitor: Failed to fetch raw API responses. ${message}`,
+      errorAuth: 'API key was rejected. Open settings to update it.',
+      errorTimeout: 'Request timed out. Check your connection and retry.',
+      errorRequest: 'Request failed. Check your connection or try again later.',
+      apiKeyCleared: 'Z.ai API key was removed from secure storage.',
     },
     configure: {
       placeholder: 'Choose a setting to update',
       apiKeyLabel: '$(key) API Key',
       apiKeyDescription: 'Update authorization credential',
       apiKeyDetail: 'The API key is stored in VS Code SecretStorage.',
+      clearApiKeyLabel: '$(trash) Clear API Key',
+      clearApiKeyDescription: 'Remove the stored credential',
+      clearApiKeyDetail: 'Deletes the API key from VS Code SecretStorage and stops monitoring.',
+      clearApiKeyConfirm: 'Remove the stored Z.ai API key?',
+      clearApiKeyConfirmYes: 'Remove',
+      clearApiKeyConfirmNo: 'Cancel',
       refreshIntervalLabel: '$(sync) Auto-refresh interval',
       refreshIntervalDescription: 'Adjust background update frequency',
       refreshIntervalDetail: 'Measured in minutes, minimum 1 minute.',
@@ -175,6 +204,7 @@ export const STRINGS: Record<Language, LocaleStrings> = {
       errorText: '$(error) Z.ai Error',
       errorTooltip: (message) => `Z.ai quota update failed: ${message}\n\nClick to open settings or retry`,
       exhaustedText: '$(error) Z.ai Exhausted',
+      noDataText: '$(pulse) Z.ai --',
     },
     quota: {
       token5h: '5-hour Token Quota',
@@ -196,6 +226,9 @@ export const STRINGS: Record<Language, LocaleStrings> = {
       daysHours: (days, hours) => `in ${days}d ${hours}h`,
       hoursMinutes: (hours, minutes) => `in ${hours}h ${minutes}m`,
       minutes: (minutes) => `in ${minutes}m`,
+      compactDaysHours: (days, hours) => `${days}d ${hours}h`,
+      compactHoursMinutes: (hours, minutes) => `${hours}h ${minutes}m`,
+      compactMinutes: (minutes) => `${minutes}m`,
     },
     tooltip: {
       activity24h: '24-hour Activity',
@@ -208,6 +241,7 @@ export const STRINGS: Record<Language, LocaleStrings> = {
       noUsageRecord: 'No usage record',
       connectedAgo: (minutes) => `Connected · Last updated ${minutes} minute${minutes === 1 ? '' : 's'} ago`,
       openOverview: 'Click to open quota overview and actions',
+      partialData: (failed, total) => `⚠ ${failed} of ${total} API endpoints failed — data may be incomplete.`,
     },
     quickPick: {
       quotaStatus: 'Quota Status',
@@ -246,16 +280,28 @@ export const STRINGS: Record<Language, LocaleStrings> = {
       resetAt: (time) => `，将在 ${time} 重置`,
       quotaExhausted: (resetInfo) => `Z.ai Quota Monitor：5 小时配额已用尽${resetInfo}。`,
       quotaLow: (percentage, resetInfo) => `Z.ai Quota Monitor：5 小时配额已使用 ${percentage}%${resetInfo}。`,
+      quotaExhaustedWeekly: (resetInfo) => `Z.ai Quota Monitor：周配额已用尽${resetInfo}。`,
+      quotaLowWeekly: (percentage, resetInfo) => `Z.ai Quota Monitor：周配额已使用 ${percentage}%${resetInfo}。`,
       firstRunPrompt: 'Z.ai Quota Monitor 需要 API Key 才能启用配额监控。',
       configureApiKey: '设置 API Key',
       debugRequiresApiKey: '请先设置 API Key。',
       rawFetchFailed: (message) => `Z.ai Quota Monitor：原始 API 响应获取失败。${message}`,
+      errorAuth: 'API Key 被拒绝，请打开设置更新。',
+      errorTimeout: '请求超时，请检查网络后重试。',
+      errorRequest: '请求失败，请检查网络或稍后重试。',
+      apiKeyCleared: 'Z.ai API Key 已从安全存储中移除。',
     },
     configure: {
       placeholder: '选择要调整的设置项目',
       apiKeyLabel: '$(key) API Key',
       apiKeyDescription: '更新授权凭证',
       apiKeyDetail: 'API Key 会储存在 VS Code SecretStorage 中。',
+      clearApiKeyLabel: '$(trash) 清除 API Key',
+      clearApiKeyDescription: '移除已存储的凭证',
+      clearApiKeyDetail: '从 VS Code SecretStorage 删除 API Key 并停止监控。',
+      clearApiKeyConfirm: '确定移除已存储的 Z.ai API Key？',
+      clearApiKeyConfirmYes: '移除',
+      clearApiKeyConfirmNo: '取消',
       refreshIntervalLabel: '$(sync) 自动刷新间隔',
       refreshIntervalDescription: '调整后台更新频率',
       refreshIntervalDetail: '以分钟为单位，至少 1 分钟。',
@@ -286,6 +332,7 @@ export const STRINGS: Record<Language, LocaleStrings> = {
       errorText: '$(error) Z.ai 错误',
       errorTooltip: (message) => `Z.ai 配额更新失败：${message}\n\n点击打开设置或重试`,
       exhaustedText: '$(error) Z.ai 已用尽',
+      noDataText: '$(pulse) Z.ai --',
     },
     quota: {
       token5h: '5 小时 Token 配额',
@@ -307,6 +354,9 @@ export const STRINGS: Record<Language, LocaleStrings> = {
       daysHours: (days, hours) => `${days} 天 ${hours} 小时后`,
       hoursMinutes: (hours, minutes) => `${hours} 小时 ${minutes} 分钟后`,
       minutes: (minutes) => `${minutes} 分钟后`,
+      compactDaysHours: (days, hours) => `${days}天 ${hours}时`,
+      compactHoursMinutes: (hours, minutes) => `${hours}时 ${minutes}分`,
+      compactMinutes: (minutes) => `${minutes}分`,
     },
     tooltip: {
       activity24h: '24 小时活动',
@@ -319,6 +369,7 @@ export const STRINGS: Record<Language, LocaleStrings> = {
       noUsageRecord: '无使用记录',
       connectedAgo: (minutes) => `已连接 · 最后更新 ${minutes} 分钟前`,
       openOverview: '点击打开配额总览与操作菜单',
+      partialData: (failed, total) => `⚠ ${total} 个接口中有 ${failed} 个失败，数据可能不完整。`,
     },
     quickPick: {
       quotaStatus: '配额状态',
@@ -354,23 +405,35 @@ export const STRINGS: Record<Language, LocaleStrings> = {
       retry: '重試',
     },
     notifications: {
-      resetAt: (time) => `，將在 ${time} 重置`,
+      resetAt: (time) => `，將於 ${time} 重設`,
       quotaExhausted: (resetInfo) => `Z.ai Quota Monitor：5 小時配額已用盡${resetInfo}。`,
       quotaLow: (percentage, resetInfo) => `Z.ai Quota Monitor：5 小時配額已使用 ${percentage}%${resetInfo}。`,
+      quotaExhaustedWeekly: (resetInfo) => `Z.ai Quota Monitor：週配額已用盡${resetInfo}。`,
+      quotaLowWeekly: (percentage, resetInfo) => `Z.ai Quota Monitor：週配額已使用 ${percentage}%${resetInfo}。`,
       firstRunPrompt: 'Z.ai Quota Monitor 需要 API Key 才能啟用配額監控。',
       configureApiKey: '設定 API Key',
       debugRequiresApiKey: '請先設定 API Key。',
       rawFetchFailed: (message) => `Z.ai Quota Monitor：原始 API 回應擷取失敗。${message}`,
+      errorAuth: 'API Key 被拒絕，請開啟設定更新。',
+      errorTimeout: '請求逾時，請檢查網路後重試。',
+      errorRequest: '請求失敗，請檢查網路或稍後重試。',
+      apiKeyCleared: 'Z.ai API Key 已從安全儲存空間移除。',
     },
     configure: {
       placeholder: '選擇要調整的設定項目',
       apiKeyLabel: '$(key) API Key',
       apiKeyDescription: '更新授權憑證',
       apiKeyDetail: 'API Key 會儲存在 VS Code SecretStorage 中。',
-      refreshIntervalLabel: '$(sync) 自動刷新間隔',
+      clearApiKeyLabel: '$(trash) 清除 API Key',
+      clearApiKeyDescription: '移除已儲存的憑證',
+      clearApiKeyDetail: '從 VS Code SecretStorage 刪除 API Key 並停止監控。',
+      clearApiKeyConfirm: '確定移除已儲存的 Z.ai API Key？',
+      clearApiKeyConfirmYes: '移除',
+      clearApiKeyConfirmNo: '取消',
+      refreshIntervalLabel: '$(sync) 自動重新整理間隔',
       refreshIntervalDescription: '調整背景更新頻率',
       refreshIntervalDetail: '以分鐘為單位，至少 1 分鐘。',
-      warnThresholdLabel: '$(warning) 警告閾值',
+      warnThresholdLabel: '$(warning) 警示門檻',
       warnThresholdDescription: '調整狀態列警示時機',
       warnThresholdDetail: '當 5 小時配額使用率達到此百分比時，狀態列會切換為警示色。',
       languageLabel: '$(globe) 語言',
@@ -382,9 +445,9 @@ export const STRINGS: Record<Language, LocaleStrings> = {
       apiKeyPrompt: '輸入 Z.ai API Key',
       apiKeyTooShort: 'API Key 太短，請檢查。',
       apiKeyStored: 'Z.ai API Key 已安全儲存。',
-      refreshIntervalPrompt: '設定自動刷新間隔（分鐘）',
+      refreshIntervalPrompt: '設定自動重新整理間隔（分鐘）',
       refreshIntervalInvalid: '請輸入大於或等於 1 的數字。',
-      warnThresholdPrompt: '設定狀態列警告閾值百分比',
+      warnThresholdPrompt: '設定狀態列警示門檻百分比',
       warnThresholdInvalid: '請輸入 50 到 100 之間的數字。',
       languagePlaceholder: '選擇顯示語言',
       languageChanged: (language) => `顯示語言已切換為 ${language}。`,
@@ -397,6 +460,7 @@ export const STRINGS: Record<Language, LocaleStrings> = {
       errorText: '$(error) Z.ai 錯誤',
       errorTooltip: (message) => `Z.ai 配額更新失敗：${message}\n\n點擊開啟設定或重試`,
       exhaustedText: '$(error) Z.ai 已用盡',
+      noDataText: '$(pulse) Z.ai --',
     },
     quota: {
       token5h: '5 小時 Token 配額',
@@ -407,17 +471,20 @@ export const STRINGS: Record<Language, LocaleStrings> = {
       healthy: '正常',
       used: '已用',
       remaining: '剩餘',
-      resetCountdown: '重置倒數',
-      resetTime: '重置時間',
+      resetCountdown: '重設倒數',
+      resetTime: '重設時間',
       plan: '方案',
       toolDetails: '工具明細',
       tokensUnit: 'tokens',
     },
     countdown: {
-      resettingSoon: '即將重置',
+      resettingSoon: '即將重設',
       daysHours: (days, hours) => `${days} 天 ${hours} 小時後`,
       hoursMinutes: (hours, minutes) => `${hours} 小時 ${minutes} 分鐘後`,
       minutes: (minutes) => `${minutes} 分鐘後`,
+      compactDaysHours: (days, hours) => `${days}天 ${hours}時`,
+      compactHoursMinutes: (hours, minutes) => `${hours}時 ${minutes}分`,
+      compactMinutes: (minutes) => `${minutes}分`,
     },
     tooltip: {
       activity24h: '24 小時活動',
@@ -430,6 +497,7 @@ export const STRINGS: Record<Language, LocaleStrings> = {
       noUsageRecord: '無使用紀錄',
       connectedAgo: (minutes) => `已連線 · 最後更新 ${minutes} 分鐘前`,
       openOverview: '點擊開啟配額總覽與操作選單',
+      partialData: (failed, total) => `⚠ ${total} 個端點中有 ${failed} 個失敗，資料可能不完整。`,
     },
     quickPick: {
       quotaStatus: '配額狀態',
@@ -450,7 +518,7 @@ export const STRINGS: Record<Language, LocaleStrings> = {
       refreshQuota: '$(refresh) 重新整理配額',
       refreshQuotaDescription: '立即更新最新用量',
       openSettings: '$(gear) 開啟設定',
-      openSettingsDescription: 'API Key、刷新間隔、警告閾值、語言',
+      openSettingsDescription: 'API Key、重新整理間隔、警示門檻、語言',
       placeholder: '查看配額狀態或選擇操作',
     },
   },

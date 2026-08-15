@@ -72,7 +72,7 @@ function fmtRemaining(
 /** Format a countdown from now to a target Date */
 function fmtCountdown(target: Date, strings: LocaleStrings): string {
   const diff = target.getTime() - Date.now();
-  if (diff <= 0) return strings.countdown.resettingSoon;
+  if (diff < 60_000) return strings.countdown.resettingSoon;
 
   const totalMin = Math.floor(diff / 60000);
   if (totalMin >= 24 * 60) {
@@ -86,28 +86,23 @@ function fmtCountdown(target: Date, strings: LocaleStrings): string {
   return strings.countdown.minutes(mins);
 }
 
-/** Format a short countdown for status bar (compact) */
-function fmtShortCountdown(target: Date, config: ExtensionConfig, strings: LocaleStrings): string {
+/** Format a short countdown for status bar (compact, i18n-aware) */
+function fmtShortCountdown(target: Date, strings: LocaleStrings): string {
   const diff = target.getTime() - Date.now();
-  if (diff <= 0) return strings.countdown.resettingSoon;
+  if (diff < 60_000) return strings.countdown.resettingSoon;
 
   const totalMin = Math.floor(diff / 60000);
   if (totalMin >= 24 * 60) {
     const days = Math.floor(totalMin / 1440);
     const hrs = Math.floor((totalMin % 1440) / 60);
-    if (config.language === 'zh-CN') return `${days}天 ${hrs}时`;
-    if (config.language === 'zh-TW') return `${days}天 ${hrs}時`;
-    return `${days}d ${hrs}h`;
+    return strings.countdown.compactDaysHours(days, hrs);
   }
-  const hrs = Math.floor(totalMin / 60);
-  const mins = totalMin % 60;
-  if (hrs > 0) {
-    if (config.language === 'zh-CN') return `${hrs}时 ${mins}分`;
-    if (config.language === 'zh-TW') return `${hrs}時 ${mins}分`;
-    return `${hrs}h ${mins}m`;
+  if (totalMin >= 60) {
+    const hrs = Math.floor(totalMin / 60);
+    const mins = totalMin % 60;
+    return strings.countdown.compactHoursMinutes(hrs, mins);
   }
-  if (config.language === 'zh-CN' || config.language === 'zh-TW') return `${mins}分`;
-  return `${mins}m`;
+  return strings.countdown.compactMinutes(totalMin);
 }
 
 /** Format a Date as HH:mm:ss */
@@ -126,6 +121,11 @@ function fmtDateTime(d: Date): string {
 /** Find a specific quota by type */
 function findQuota(quotas: QuotaLimit[], type: QuotaLimit['type']): QuotaLimit | undefined {
   return quotas.find(q => q.type === type);
+}
+
+/** Escape API-derived strings before interpolating into markdown (tooltip has HTML enabled) */
+function escapeMd(s: string): string {
+  return s.replace(/([\\`*_[\]()<>#])/g, '\\$1');
 }
 
 // ============================================================================
@@ -173,7 +173,12 @@ export class QuotaIndicator {
     this.statusBarItem.show();
   }
 
-  showError(message: string): void {
+  showError(message: string, staleData?: UsageData): void {
+    if (staleData) {
+      // Keep the last known usage visible, but flag it with the error state
+      this.updateUsage(staleData, { errorNote: message });
+      return;
+    }
     const strings = this.strings;
     this.statusBarItem.text = strings.status.errorText;
     this.statusBarItem.tooltip = strings.status.errorTooltip(message);
@@ -182,20 +187,24 @@ export class QuotaIndicator {
   }
 
   /** Main update — display usage data in the status bar */
-  updateUsage(data: UsageData): void {
+  updateUsage(data: UsageData, options: { errorNote?: string } = {}): void {
     const tokenQuota = findQuota(data.quotas, 'token');
     const weeklyQuota = findQuota(data.quotas, 'weekly');
     const mcpQuota = findQuota(data.quotas, 'mcp');
 
+    // Primary quota for the status bar: 5-hour window, falling back to
+    // weekly for plans that do not report a 5-hour quota.
+    const primary = tokenQuota ?? weeklyQuota;
+
     // -- Status bar text --
-    this.updateStatusBarText(tokenQuota);
+    this.updateStatusBarText(primary);
 
     // -- Tooltip --
-    this.statusBarItem.tooltip = this.buildTooltip(data, tokenQuota, weeklyQuota, mcpQuota);
+    this.statusBarItem.tooltip = this.buildTooltip(data, tokenQuota, weeklyQuota, mcpQuota, options.errorNote);
 
     // -- Background color based on threshold --
-    const pct = tokenQuota?.percentage ?? 0;
-    if (pct >= 100) {
+    const pct = primary?.percentage ?? 0;
+    if (options.errorNote || pct >= 100) {
       this.statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
     } else if (pct >= this._config.warnThreshold) {
       this.statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
@@ -207,14 +216,14 @@ export class QuotaIndicator {
   }
 
   /** Build status bar text */
-  private updateStatusBarText(tokenQuota?: QuotaLimit): void {
+  private updateStatusBarText(quota?: QuotaLimit): void {
     const strings = this.strings;
-    if (!tokenQuota) {
-      this.statusBarItem.text = '$(pulse) Z.ai --';
+    if (!quota) {
+      this.statusBarItem.text = strings.status.noDataText;
       return;
     }
 
-    const pct = Math.round(clampPct(tokenQuota.percentage));
+    const pct = Math.round(clampPct(quota.percentage));
 
     if (pct >= 100) {
       this.statusBarItem.text = strings.status.exhaustedText;
@@ -224,8 +233,8 @@ export class QuotaIndicator {
     let text = `$(pulse) Z.ai ${pct}%`;
 
     // Append countdown if enabled and reset time exists
-    if (this._config.showCountdown && tokenQuota.nextResetTime) {
-      const countdown = fmtShortCountdown(tokenQuota.nextResetTime, this._config, strings);
+    if (this._config.showCountdown && quota.nextResetTime) {
+      const countdown = fmtShortCountdown(quota.nextResetTime, strings);
       text += ` · ${countdown}`;
     }
 
@@ -238,13 +247,14 @@ export class QuotaIndicator {
     tokenQuota?: QuotaLimit,
     weeklyQuota?: QuotaLimit,
     mcpQuota?: QuotaLimit,
+    errorNote?: string,
   ): vscode.MarkdownString {
     const strings = this.strings;
     const md = new vscode.MarkdownString(undefined, true);
 
     md.appendMarkdown('### Z.ai Quota Monitor\n\n');
     if (data.planName) {
-      md.appendMarkdown(`**${strings.quota.plan}:** ${data.planName}\n\n`);
+      md.appendMarkdown(`**${strings.quota.plan}:** ${escapeMd(data.planName)}\n\n`);
     }
 
     // -- 5-hour token quota --
@@ -271,7 +281,7 @@ export class QuotaIndicator {
       if (mcpQuota.usageDetails && mcpQuota.usageDetails.length > 0) {
         md.appendMarkdown(`**${strings.quota.toolDetails}**\n\n`);
         for (const d of mcpQuota.usageDetails) {
-          md.appendMarkdown(`- \`${d.modelCode}\`: ${fmtNum(d.usage)}\n`);
+          md.appendMarkdown(`- \`${escapeMd(d.modelCode)}\`: ${fmtNum(d.usage)}\n`);
         }
         md.appendMarkdown('\n');
       }
@@ -306,7 +316,13 @@ export class QuotaIndicator {
 
     // -- Footer --
     md.appendMarkdown('---\n\n');
-    const ago = Math.round((Date.now() - data.fetchedAt.getTime()) / 60000);
+    if (data.endpointErrors && data.endpointErrors.length > 0) {
+      md.appendMarkdown(`${strings.tooltip.partialData(data.endpointErrors.length, 3)}\n\n`);
+    }
+    if (errorNote) {
+      md.appendMarkdown(`${strings.status.errorTooltip(errorNote)}\n\n`);
+    }
+    const ago = Math.max(0, Math.round((Date.now() - data.fetchedAt.getTime()) / 60000));
     md.appendMarkdown(`${strings.tooltip.connectedAgo(ago)}\n\n`);
     md.appendMarkdown(strings.tooltip.openOverview);
 

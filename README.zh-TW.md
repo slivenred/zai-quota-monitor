@@ -24,7 +24,7 @@
 
 ### 從 VSIX 安裝
 
-1. 下載 `zai-quota-monitor-1.0.0.vsix`
+1. 從 [GitHub Releases](https://github.com/slivenred/zai-quota-monitor/releases) 下載最新的 `.vsix`
 2. 在 VS Code 中執行 `Extensions: Install from VSIX...`
 3. 選擇下載的 `.vsix` 檔案
 
@@ -65,9 +65,10 @@ npm run package
 
 ## 獨立腳本
 
-如果不想安裝擴充功能，也可以使用獨立腳本：
+如果不想安裝擴充功能，也可以使用獨立腳本。它與擴充功能共用編譯後的 API 用戶端，請先完成一次建置：
 
 ```bash
+npm install && npm run compile
 export ZAI_API_KEY="your-api-key"
 node zai-quota.mjs
 ```

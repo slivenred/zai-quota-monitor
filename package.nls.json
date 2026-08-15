@@ -1,0 +1,15 @@
+{
+  "zaiQuota.category": "Z.ai Quota",
+  "zaiQuota.command.refresh": "Refresh Usage",
+  "zaiQuota.command.configure": "Configure Monitor",
+  "zaiQuota.command.showDetail": "Open Usage Overview",
+  "zaiQuota.command.debugRaw": "Debug: Open Raw API Responses",
+  "zaiQuota.config.title": "Z.ai Quota Monitor",
+  "zaiQuota.config.refreshInterval": "Auto-refresh interval in minutes",
+  "zaiQuota.config.warnThreshold": "Percentage threshold for status bar warning color",
+  "zaiQuota.config.showCountdown": "Show reset countdown in status bar text",
+  "zaiQuota.config.language": "Display language for Z.ai Quota Monitor UI",
+  "zaiQuota.language.en": "English",
+  "zaiQuota.language.zhCN": "Simplified Chinese",
+  "zaiQuota.language.zhTW": "Traditional Chinese"
+}

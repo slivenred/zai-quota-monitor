@@ -2,7 +2,7 @@
   "name": "zai-quota-monitor",
   "displayName": "Z.ai Quota Monitor",
   "description": "Monitor Z.ai GLM Coding Plan quota with a refined status bar overview and reset countdown",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "publisher": "slivenred",
   "icon": "media/icon.png",
   "license": "MIT",
@@ -10,8 +10,17 @@
     "type": "git",
     "url": "https://github.com/slivenred/zai-quota-monitor"
   },
+  "bugs": {
+    "url": "https://github.com/slivenred/zai-quota-monitor/issues"
+  },
+  "pricing": "Free",
   "engines": {
     "vscode": "^1.85.0"
+  },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    }
   },
   "categories": [
     "Other",
@@ -34,33 +43,33 @@
     "commands": [
       {
         "command": "zaiQuota.refresh",
-        "title": "Refresh Usage",
-        "category": "Z.ai Quota"
+        "title": "%zaiQuota.command.refresh%",
+        "category": "%zaiQuota.category%"
       },
       {
         "command": "zaiQuota.configure",
-        "title": "Configure Monitor",
-        "category": "Z.ai Quota"
+        "title": "%zaiQuota.command.configure%",
+        "category": "%zaiQuota.category%"
       },
       {
         "command": "zaiQuota.showDetail",
-        "title": "Open Usage Overview",
-        "category": "Z.ai Quota"
+        "title": "%zaiQuota.command.showDetail%",
+        "category": "%zaiQuota.category%"
       },
       {
         "command": "zaiQuota.debugRaw",
-        "title": "Debug: Open Raw API Responses",
-        "category": "Z.ai Quota"
+        "title": "%zaiQuota.command.debugRaw%",
+        "category": "%zaiQuota.category%"
       }
     ],
     "configuration": {
-      "title": "Z.ai Quota Monitor",
+      "title": "%zaiQuota.config.title%",
       "properties": {
         "zaiQuota.refreshInterval": {
           "type": "number",
           "default": 5,
           "minimum": 1,
-          "description": "Auto-refresh interval in minutes",
+          "description": "%zaiQuota.config.refreshInterval%",
           "order": 1
         },
         "zaiQuota.warnThreshold": {
@@ -68,13 +77,13 @@
           "default": 85,
           "minimum": 50,
           "maximum": 100,
-          "description": "Percentage threshold for status bar warning color",
+          "description": "%zaiQuota.config.warnThreshold%",
           "order": 2
         },
         "zaiQuota.showCountdown": {
           "type": "boolean",
           "default": true,
-          "description": "Show reset countdown in status bar text",
+          "description": "%zaiQuota.config.showCountdown%",
           "order": 3
         },
         "zaiQuota.language": {
@@ -86,11 +95,11 @@
             "zh-TW"
           ],
           "enumDescriptions": [
-            "English",
-            "Simplified Chinese",
-            "Traditional Chinese"
+            "%zaiQuota.language.en%",
+            "%zaiQuota.language.zhCN%",
+            "%zaiQuota.language.zhTW%"
           ],
-          "description": "Display language for Z.ai Quota Monitor UI",
+          "description": "%zaiQuota.config.language%",
           "order": 4
         }
       }
@@ -100,7 +109,7 @@
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "lint": "eslint src --ext ts",
+    "test": "npm run compile && node --test \"out/test/*.test.js\"",
     "package": "npx @vscode/vsce package --no-dependencies"
   },
   "devDependencies": {

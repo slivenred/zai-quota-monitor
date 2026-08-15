@@ -89,6 +89,12 @@ export interface ToolUsage {
   zreadCalls: number;
 }
 
+/** A single endpoint that failed while others succeeded */
+export interface EndpointError {
+  endpoint: 'quotaLimit' | 'modelUsage' | 'toolUsage';
+  message: string;
+}
+
 /** Complete usage data returned by the API client */
 export interface UsageData {
   quotas: QuotaLimit[];
@@ -96,10 +102,9 @@ export interface UsageData {
   toolUsage: ToolUsage | null;
   planName?: string;
   fetchedAt: Date;
+  /** Endpoints that failed while at least one succeeded (partial data) */
+  endpointErrors: EndpointError[];
 }
-
-/** Connection state for status display */
-export type ConnectionState = 'connected' | 'loading' | 'error' | 'not_configured';
 
 // ============================================================================
 // Configuration Types
