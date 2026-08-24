@@ -1,4 +1,4 @@
-name: Temporary secure Ahrefs DR verification
+name: Temporary domain history verification
 
 on:
   pull_request:
@@ -7,258 +7,155 @@ on:
 
 permissions:
   contents: read
-  issues: write
-  pull-requests: write
-
-concurrency:
-  group: temporary-ahrefs-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
 
 jobs:
-  check:
+  inspect:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    env:
-      GH_TOKEN: ${{ github.token }}
-      PR_NUMBER: ${{ github.event.pull_request.number }}
     steps:
-      - name: Create one-time key exchange and wait for encrypted token
+      - name: Inspect Wayback history and public scan records
         shell: bash
         run: |
           set -euo pipefail
-          umask 077
-          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 -out /tmp/private.pem 2>/dev/null
-          openssl pkey -in /tmp/private.pem -pubout -out /tmp/public.pem
-          NONCE="$(openssl rand -hex 16)"
-          printf '%s' "$NONCE" > /tmp/nonce
-          PUB_B64="$(base64 -w0 /tmp/public.pem)"
-          gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
-            --method POST \
-            -f body="AHREFS_KEY_EXCHANGE_PUBLIC:${NONCE}:${PUB_B64}" >/dev/null
-
-          FOUND=""
-          for _ in $(seq 1 180); do
-            FOUND="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
-              --paginate --jq '.[].body' 2>/dev/null \
-              | grep -F "AHREFS_CIPHERTEXT:${NONCE}:" \
-              | tail -n 1 || true)"
-            if [ -n "$FOUND" ]; then
-              break
-            fi
-            sleep 2
-          done
-
-          if [ -z "$FOUND" ]; then
-            echo '::error::Timed out waiting for the encrypted Ahrefs token.'
-            exit 1
-          fi
-
-          CIPHER_B64="${FOUND#AHREFS_CIPHERTEXT:${NONCE}:}"
-          printf '%s' "$CIPHER_B64" | base64 -d > /tmp/token.enc
-          openssl pkeyutl -decrypt \
-            -inkey /tmp/private.pem \
-            -in /tmp/token.enc \
-            -pkeyopt rsa_padding_mode:oaep \
-            -pkeyopt rsa_oaep_md:sha256 \
-            -pkeyopt rsa_mgf1_md:sha256 \
-            > /tmp/ahrefs-token
-          chmod 600 /tmp/ahrefs-token
-          TOKEN="$(cat /tmp/ahrefs-token)"
-          if [ ${#TOKEN} -lt 20 ]; then
-            echo '::error::Decrypted token is unexpectedly short.'
-            exit 1
-          fi
-          echo "::add-mask::$TOKEN"
-          rm -f /tmp/private.pem /tmp/token.enc
-
-      - name: Verify availability and query official Ahrefs DR endpoint
-        shell: bash
-        run: |
-          set -euo pipefail
-          cat > /tmp/check.mjs <<'EOF'
+          cat > /tmp/history.mjs <<'EOF'
           import fs from 'node:fs';
 
-          const token = fs.readFileSync('/tmp/ahrefs-token', 'utf8').trim();
-          const groups = {
-            name: [
-              'file','attr','param','field','item','arg','ctx','prop','model','node','data','user','schema','column','table','class','service','package','module','route','task','event','record','object','component','resource','namespace','document','query','metric','property','form','input','button','option','key','value','tag','page','project','profile','account','role','group','team','image','database','index','collection','method','function','variable','element','feature','label','message','config','source','target','parent','child','root','app','site','server','client','request','response','token','repo','branch','host','type','state','status','title','slug','path','bruch','big-data','delizaur','yycode'
-            ],
-            host: [
-              'url','location','request','origin','proxy','pointer','savvy','server','database','redis','smtp','api','backend','frontend','target','source','remote','local','virtual','current','default','public','private','primary','secondary','gateway','socket','client','service','app','site','web','mail','dns','cache','db','node','cluster','container','worker'
-            ],
-            style: [
-              'element','button','input','node','table','cell','default','hover','active','current','computed','inline','global','local','theme','text','color','border','layout','display','body','html','page','form','link','menu','header','footer','card','grid','flex','mobile','desktop','print','dark','light'
-            ],
-            properties: [
-              'german','english','french','spanish','messages','application','local','server','database','jdbc','system','config','gradle','build','project','user','default','test','production','development','staging','logging','security','mail','api','client','app','global','environment','translation','labels','errors','validation','version'
-            ],
-            zip: [
-              'clientupdate','storageapi','update','installer','patch','backup','release','source','download','archive','project','files','assets','images','data','database','logs','export','import','package','build','dist','deploy','deployment','app','application','client','server','sdk','api','docs','documentation','samples','examples','code','repo','repository','website','site','theme','plugin','module','template','resources','content','media','upload','uploads','public','private','config','settings','report','reports','invoice','invoices','resume','portfolio'
-            ],
-            mov: [
-              'video','intro','trailer','sample','demo','preview','screenrecording','recording','final','export','clip','animation','render','movie','footage','presentation','tutorial','walkthrough'
-            ],
-            sh: [
-              'install','setup','deploy','build','start','stop','restart','backup','restore','migrate','bootstrap','entrypoint','init','run','test','update','cleanup','sync','publish','release','configure','healthcheck','postinstall','preinstall','provision','download','upload','monitor','worker','server','client'
-            ],
-            md: [
-              'readme','changelog','security','contributing','code-of-conduct','license','architecture','deployment','migration','troubleshooting','roadmap','faq','docs','documentation','guide','api','setup','install','usage','examples','release','releases','changes','todo','notes','overview','design','specification','spec','governance','support','maintainers','authors'
-            ]
-          };
+          const domains = [
+            'form.name','file.name','hover.style','state.name','source.zip','target.name','app.name','parent.name',
+            'record.name','theme.zip','location.host','site.name','url.host','object.name','key.name','query.name'
+          ];
+          const sleep = ms => new Promise(r => setTimeout(r, ms));
+          const badTerms = [
+            'casino','gambling','sportsbook','betting','slot machine','online slots','porn','xxx','adult video','escort',
+            'viagra','cialis','levitra','pharmacy','payday loan','crypto casino','bitcoin casino','marijuana','cannabis',
+            '博彩','赌场','色情','成人影片','壯陽','壮阳','貸款','贷款'
+          ];
+          const parkingTerms = [
+            'domain for sale','buy this domain','this domain may be for sale','sedo','afternic','dan.com','bodis',
+            'parkingcrew','hugedomains','undeveloped.com','domainmarket','above.com','cashparking'
+          ];
 
-          const domains = [...new Set(Object.entries(groups).flatMap(([tld, labels]) => labels.map(label => `${label}.${tld}`)))];
-          const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-
-          async function fetchRetry(url, options = {}, retries = 3) {
-            let lastError;
-            for (let attempt = 0; attempt <= retries; attempt++) {
+          async function request(url, retries = 3) {
+            let error;
+            for (let i = 0; i <= retries; i++) {
               try {
-                const response = await fetch(url, { ...options, signal: AbortSignal.timeout(20000) });
-                if ((response.status === 429 || response.status >= 500) && attempt < retries) {
-                  const retryAfter = Number(response.headers.get('retry-after'));
-                  await sleep(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 1200 * (2 ** attempt));
-                  continue;
-                }
-                return response;
-              } catch (error) {
-                lastError = error;
-                if (attempt < retries) {
-                  await sleep(1200 * (2 ** attempt));
-                  continue;
-                }
-              }
-            }
-            throw lastError ?? new Error('request failed');
-          }
-
-          const bootstrapResponse = await fetchRetry('https://data.iana.org/rdap/dns.json', { headers: { Accept: 'application/json' } });
-          if (!bootstrapResponse.ok) throw new Error(`IANA RDAP bootstrap failed: ${bootstrapResponse.status}`);
-          const bootstrap = await bootstrapResponse.json();
-          const rdapByTld = new Map();
-          for (const service of bootstrap.services ?? []) {
-            const [tlds, bases] = service;
-            const base = Array.isArray(bases) ? bases.find(value => String(value).startsWith('https://')) ?? bases[0] : null;
-            if (!base) continue;
-            for (const tld of tlds ?? []) rdapByTld.set(String(tld).toLowerCase(), String(base));
-          }
-
-          async function checkAvailability(domain) {
-            const tld = domain.split('.').at(-1);
-            const base = rdapByTld.get(tld);
-            if (!base) return { domain, available: null, rdapStatus: null, rdapError: 'No IANA RDAP service' };
-            const url = `${base.replace(/\/?$/, '/') }domain/${encodeURIComponent(domain)}`;
-            try {
-              const response = await fetchRetry(url, { redirect: 'follow', headers: { Accept: 'application/rdap+json, application/json' } }, 2);
-              return {
-                domain,
-                available: response.status === 404 ? true : response.status === 200 ? false : null,
-                rdapStatus: response.status,
-                rdapError: response.status === 200 || response.status === 404 ? null : (await response.text()).slice(0, 180)
-              };
-            } catch (error) {
-              return { domain, available: null, rdapStatus: null, rdapError: String(error?.message ?? error) };
-            }
-          }
-
-          async function pool(items, concurrency, worker) {
-            const output = new Array(items.length);
-            let cursor = 0;
-            async function run() {
-              while (true) {
-                const index = cursor++;
-                if (index >= items.length) return;
-                output[index] = await worker(items[index], index);
-                await sleep(120);
-              }
-            }
-            await Promise.all(Array.from({ length: concurrency }, run));
-            return output;
-          }
-
-          console.log(`CANDIDATE_COUNT ${domains.length}`);
-          const availability = await pool(domains, 4, checkAvailability);
-          const availableRows = availability.filter(row => row.available === true);
-          console.log(`RDAP_AVAILABLE_COUNT ${availableRows.length}`);
-          console.log(`RDAP_UNKNOWN_COUNT ${availability.filter(row => row.available === null).length}`);
-
-          async function ahrefs(domain, maxRetries = 5) {
-            const endpoint = `https://api.ahrefs.com/v3/public/domain-rating-free?target=${encodeURIComponent(domain)}&output=json`;
-            for (let attempt = 0; attempt <= maxRetries; attempt++) {
-              try {
-                const response = await fetch(endpoint, {
-                  headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
-                  signal: AbortSignal.timeout(25000)
+                const r = await fetch(url, {
+                  redirect: 'follow',
+                  headers: { 'User-Agent': 'Mozilla/5.0 domain-history-audit/1.0', 'Accept': 'application/json,text/html,*/*' },
+                  signal: AbortSignal.timeout(30000)
                 });
-                const text = await response.text();
-                if ((response.status === 429 || response.status >= 500) && attempt < maxRetries) {
-                  const retryAfter = Number(response.headers.get('retry-after'));
-                  await sleep(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 3000 * (attempt + 1));
+                if ((r.status === 429 || r.status >= 500) && i < retries) {
+                  await sleep(1800 * (i + 1));
                   continue;
                 }
-                if (!response.ok) return { dr: null, ahrefsStatus: response.status, ahrefsError: text.slice(0, 220) };
-                const data = JSON.parse(text);
-                const value = data?.domain_rating?.domain_rating;
-                return {
-                  dr: typeof value === 'number' ? Math.round(value * 10) / 10 : null,
-                  ahrefsStatus: response.status,
-                  ahrefsError: typeof value === 'number' ? null : text.slice(0, 220)
-                };
-              } catch (error) {
-                if (attempt < maxRetries) {
-                  await sleep(3000 * (attempt + 1));
-                  continue;
-                }
-                return { dr: null, ahrefsStatus: null, ahrefsError: String(error?.message ?? error) };
+                return r;
+              } catch (e) {
+                error = e;
+                if (i < retries) { await sleep(1800 * (i + 1)); continue; }
               }
             }
+            throw error ?? new Error('request failed');
           }
 
-          const controlGoogle = await ahrefs('google.com');
-          const controlExample = await ahrefs('example.com');
-          console.log(`CONTROL_GOOGLE ${JSON.stringify(controlGoogle)}`);
-          console.log(`CONTROL_EXAMPLE ${JSON.stringify(controlExample)}`);
-          if (controlGoogle.ahrefsStatus !== 200 || typeof controlGoogle.dr !== 'number') {
-            throw new Error(`Ahrefs token validation failed: ${JSON.stringify(controlGoogle)}`);
+          function sampleRows(rows) {
+            if (rows.length <= 4) return rows;
+            const indexes = [...new Set([0, Math.floor((rows.length - 1) / 3), Math.floor(2 * (rows.length - 1) / 3), rows.length - 1])];
+            return indexes.map(i => rows[i]);
           }
 
-          const drRows = [];
-          for (let index = 0; index < availableRows.length; index++) {
-            const availabilityRow = availableRows[index];
-            const rating = await ahrefs(availabilityRow.domain);
-            const row = { ...availabilityRow, ...rating };
-            drRows.push(row);
+          function inspectHtml(html) {
+            const lower = html.toLowerCase();
+            const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+            const title = titleMatch ? titleMatch[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 180) : '';
+            const badMatches = badTerms.filter(term => lower.includes(term.toLowerCase()));
+            const parkingMatches = parkingTerms.filter(term => lower.includes(term.toLowerCase()));
+            return { title, badMatches, parkingMatches, bytes: Buffer.byteLength(html) };
+          }
+
+          async function inspectDomain(domain) {
+            const params = new URLSearchParams({
+              url: `${domain}/*`, output: 'json', fl: 'timestamp,original,statuscode,mimetype,digest',
+              filter: 'statuscode:200', collapse: 'digest', limit: '1000'
+            });
+            let rows = [];
+            let cdxStatus = null;
+            let cdxError = null;
+            try {
+              const r = await request(`https://web.archive.org/cdx/search/cdx?${params.toString()}`, 4);
+              cdxStatus = r.status;
+              const text = await r.text();
+              if (r.ok && text.trim()) {
+                const json = JSON.parse(text);
+                if (Array.isArray(json) && json.length > 1) {
+                  const headers = json[0];
+                  rows = json.slice(1).map(values => Object.fromEntries(headers.map((h, i) => [h, values[i]])));
+                }
+              } else if (!r.ok) cdxError = text.slice(0, 300);
+            } catch (e) { cdxError = String(e?.message ?? e); }
+
+            rows.sort((a,b) => String(a.timestamp).localeCompare(String(b.timestamp)));
+            const snapshots = [];
+            for (const row of sampleRows(rows)) {
+              try {
+                const archived = `https://web.archive.org/web/${row.timestamp}id_/${row.original}`;
+                const r = await request(archived, 2);
+                const html = await r.text();
+                snapshots.push({ timestamp: row.timestamp, original: row.original, status: r.status, ...inspectHtml(html) });
+              } catch (e) {
+                snapshots.push({ timestamp: row.timestamp, original: row.original, status: null, error: String(e?.message ?? e) });
+              }
+              await sleep(650);
+            }
+
+            let urlscanCount = null;
+            let urlscanMalicious = null;
+            let urlscanTitles = [];
+            let urlscanError = null;
+            try {
+              const r = await request(`https://urlscan.io/api/v1/search/?q=domain:${encodeURIComponent(domain)}&size=100`, 2);
+              const text = await r.text();
+              if (r.ok) {
+                const data = JSON.parse(text);
+                const results = Array.isArray(data.results) ? data.results : [];
+                urlscanCount = results.length;
+                urlscanMalicious = results.filter(x => x?.verdicts?.overall?.malicious === true).length;
+                urlscanTitles = [...new Set(results.map(x => x?.page?.title).filter(Boolean))].slice(0, 8);
+              } else urlscanError = text.slice(0, 250);
+            } catch (e) { urlscanError = String(e?.message ?? e); }
+
+            const allBad = [...new Set(snapshots.flatMap(x => x.badMatches ?? []))];
+            const allParking = [...new Set(snapshots.flatMap(x => x.parkingMatches ?? []))];
+            return {
+              domain,
+              captureCount: rows.length,
+              firstCapture: rows[0]?.timestamp ?? null,
+              lastCapture: rows.at(-1)?.timestamp ?? null,
+              cdxStatus, cdxError,
+              badTerms: allBad,
+              parkingTerms: allParking,
+              snapshots,
+              urlscanCount, urlscanMalicious, urlscanTitles, urlscanError
+            };
+          }
+
+          const results = [];
+          for (const domain of domains) {
+            const row = await inspectDomain(domain);
+            results.push(row);
             console.log(`ROW ${JSON.stringify(row)}`);
-            await sleep(2100);
+            await sleep(850);
           }
-
-          const unknownRows = availability.filter(row => row.available === null);
-          drRows.sort((a, b) => (b.dr ?? -1) - (a.dr ?? -1) || a.domain.localeCompare(b.domain));
-          const payload = {
-            checkedAt: new Date().toISOString(),
-            endpoint: 'https://api.ahrefs.com/v3/public/domain-rating-free',
-            candidateCount: domains.length,
-            availableCount: availableRows.length,
-            unknownAvailabilityCount: unknownRows.length,
-            controls: { googleCom: controlGoogle, exampleCom: controlExample },
-            results: drRows,
-            unknownAvailability: unknownRows
-          };
-          fs.writeFileSync('/tmp/results.json', JSON.stringify(payload, null, 2));
-          fs.writeFileSync('/tmp/results.log', drRows.map(row => JSON.stringify(row)).join('\n') + '\n');
+          const payload = { checkedAt: new Date().toISOString(), results };
+          fs.writeFileSync('/tmp/history-results.json', JSON.stringify(payload, null, 2));
           console.log('RESULTS_JSON_START');
           console.log(JSON.stringify(payload, null, 2));
           console.log('RESULTS_JSON_END');
           EOF
-
-          node /tmp/check.mjs
-          rm -f /tmp/ahrefs-token
-
-      - name: Upload verified results
+          node /tmp/history.mjs
+      - name: Upload history audit
         uses: actions/upload-artifact@v4
         with:
-          name: official-ahrefs-dr-results
-          path: |
-            /tmp/results.json
-            /tmp/results.log
+          name: verified-domain-history
+          path: /tmp/history-results.json
           retention-days: 1
           if-no-files-found: error
