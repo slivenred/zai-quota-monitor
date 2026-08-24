@@ -1,0 +1,92 @@
+name: Temporary Ahrefs DR verification
+
+on:
+  push:
+    branches:
+      - tmp-proxy-links-20260824
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Query Ahrefs DR and RDAP
+        shell: bash
+        run: |
+          cat > /tmp/check.mjs <<'EOF'
+          const domains = [
+            'file.name','url.host','location.host','request.host','origin.host','proxy.host','pointer.host','savvy.host',
+            'element.style','button.style','input.style','node.style','table.style','cell.style','default.style',
+            'german.properties','application.properties','local.properties','server.properties','database.properties','jdbc.properties','messages.properties','system.properties','english.properties',
+            'clientupdate.zip','storageapi.zip','update.zip','installer.zip','patch.zip','backup.zip','release.zip','source.zip','download.zip','archive.zip',
+            'bruch.name','big-data.name','delizaur.name','attr.name','param.name','field.name','item.name','arg.name','ctx.name','prop.name','model.name','node.name','data.name','user.name','schema.name','column.name','table.name','class.name','service.name','package.name','module.name','route.name','task.name','event.name','record.name','object.name','component.name','resource.name','namespace.name','document.name','query.name','metric.name','property.name',
+            'google.com','example.com'
+          ];
+
+          const sleep = ms => new Promise(r => setTimeout(r, ms));
+          async function check(domain) {
+            let rdapStatus = null;
+            let available = null;
+            let rdapError = null;
+            try {
+              const r = await fetch(`https://rdap.org/domain/${encodeURIComponent(domain)}`, {
+                redirect: 'follow',
+                headers: { 'Accept': 'application/rdap+json, application/json' },
+                signal: AbortSignal.timeout(12000)
+              });
+              rdapStatus = r.status;
+              available = r.status === 404;
+            } catch (e) {
+              rdapError = String(e?.message || e);
+            }
+
+            let dr = null;
+            let ahrefsStatus = null;
+            let ahrefsError = null;
+            try {
+              const r = await fetch(`https://api.ahrefs.com/v3/public/domain-rating-free?target=${encodeURIComponent(domain)}&output=json`, {
+                headers: { 'Accept': 'application/json' },
+                signal: AbortSignal.timeout(12000)
+              });
+              ahrefsStatus = r.status;
+              const text = await r.text();
+              if (r.ok) {
+                const data = JSON.parse(text);
+                const value = data?.domain_rating?.domain_rating;
+                if (typeof value === 'number') dr = Math.round(value * 10) / 10;
+                else ahrefsError = `No rating: ${text.slice(0,200)}`;
+              } else {
+                ahrefsError = text.slice(0,300);
+              }
+            } catch (e) {
+              ahrefsError = String(e?.message || e);
+            }
+
+            return { domain, dr, available, rdapStatus, ahrefsStatus, rdapError, ahrefsError };
+          }
+
+          const results = [];
+          for (let i = 0; i < domains.length; i++) {
+            const row = await check(domains[i]);
+            results.push(row);
+            console.log(`ROW ${JSON.stringify(row)}`);
+            await sleep(250);
+          }
+          results.sort((a,b) => (b.dr ?? -1) - (a.dr ?? -1) || a.domain.localeCompare(b.domain));
+          console.log('RESULTS_JSON_START');
+          console.log(JSON.stringify(results, null, 2));
+          console.log('RESULTS_JSON_END');
+          EOF
+          node /tmp/check.mjs | tee /tmp/results.log
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: ahrefs-dr-results
+          path: /tmp/results.log
+          retention-days: 1
