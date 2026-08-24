@@ -1,92 +1,264 @@
-name: Temporary Ahrefs DR verification
+name: Temporary secure Ahrefs DR verification
 
 on:
-  push:
-    branches:
-      - tmp-proxy-links-20260824
   pull_request:
     branches:
       - main
 
 permissions:
   contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: temporary-ahrefs-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
     steps:
-      - name: Query Ahrefs DR and RDAP
+      - name: Create one-time key exchange and wait for encrypted token
         shell: bash
         run: |
+          set -euo pipefail
+          umask 077
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 -out /tmp/private.pem 2>/dev/null
+          openssl pkey -in /tmp/private.pem -pubout -out /tmp/public.pem
+          NONCE="$(openssl rand -hex 16)"
+          printf '%s' "$NONCE" > /tmp/nonce
+          PUB_B64="$(base64 -w0 /tmp/public.pem)"
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+            --method POST \
+            -f body="AHREFS_KEY_EXCHANGE_PUBLIC:${NONCE}:${PUB_B64}" >/dev/null
+
+          FOUND=""
+          for _ in $(seq 1 180); do
+            FOUND="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+              --paginate --jq '.[].body' 2>/dev/null \
+              | grep -F "AHREFS_CIPHERTEXT:${NONCE}:" \
+              | tail -n 1 || true)"
+            if [ -n "$FOUND" ]; then
+              break
+            fi
+            sleep 2
+          done
+
+          if [ -z "$FOUND" ]; then
+            echo '::error::Timed out waiting for the encrypted Ahrefs token.'
+            exit 1
+          fi
+
+          CIPHER_B64="${FOUND#AHREFS_CIPHERTEXT:${NONCE}:}"
+          printf '%s' "$CIPHER_B64" | base64 -d > /tmp/token.enc
+          openssl pkeyutl -decrypt \
+            -inkey /tmp/private.pem \
+            -in /tmp/token.enc \
+            -pkeyopt rsa_padding_mode:oaep \
+            -pkeyopt rsa_oaep_md:sha256 \
+            -pkeyopt rsa_mgf1_md:sha256 \
+            > /tmp/ahrefs-token
+          chmod 600 /tmp/ahrefs-token
+          TOKEN="$(cat /tmp/ahrefs-token)"
+          if [ ${#TOKEN} -lt 20 ]; then
+            echo '::error::Decrypted token is unexpectedly short.'
+            exit 1
+          fi
+          echo "::add-mask::$TOKEN"
+          rm -f /tmp/private.pem /tmp/token.enc
+
+      - name: Verify availability and query official Ahrefs DR endpoint
+        shell: bash
+        run: |
+          set -euo pipefail
           cat > /tmp/check.mjs <<'EOF'
-          const domains = [
-            'file.name','url.host','location.host','request.host','origin.host','proxy.host','pointer.host','savvy.host',
-            'element.style','button.style','input.style','node.style','table.style','cell.style','default.style',
-            'german.properties','application.properties','local.properties','server.properties','database.properties','jdbc.properties','messages.properties','system.properties','english.properties',
-            'clientupdate.zip','storageapi.zip','update.zip','installer.zip','patch.zip','backup.zip','release.zip','source.zip','download.zip','archive.zip',
-            'bruch.name','big-data.name','delizaur.name','attr.name','param.name','field.name','item.name','arg.name','ctx.name','prop.name','model.name','node.name','data.name','user.name','schema.name','column.name','table.name','class.name','service.name','package.name','module.name','route.name','task.name','event.name','record.name','object.name','component.name','resource.name','namespace.name','document.name','query.name','metric.name','property.name',
-            'google.com','example.com'
-          ];
+          import fs from 'node:fs';
 
-          const sleep = ms => new Promise(r => setTimeout(r, ms));
-          async function check(domain) {
-            let rdapStatus = null;
-            let available = null;
-            let rdapError = null;
-            try {
-              const r = await fetch(`https://rdap.org/domain/${encodeURIComponent(domain)}`, {
-                redirect: 'follow',
-                headers: { 'Accept': 'application/rdap+json, application/json' },
-                signal: AbortSignal.timeout(12000)
-              });
-              rdapStatus = r.status;
-              available = r.status === 404;
-            } catch (e) {
-              rdapError = String(e?.message || e);
+          const token = fs.readFileSync('/tmp/ahrefs-token', 'utf8').trim();
+          const groups = {
+            name: [
+              'file','attr','param','field','item','arg','ctx','prop','model','node','data','user','schema','column','table','class','service','package','module','route','task','event','record','object','component','resource','namespace','document','query','metric','property','form','input','button','option','key','value','tag','page','project','profile','account','role','group','team','image','database','index','collection','method','function','variable','element','feature','label','message','config','source','target','parent','child','root','app','site','server','client','request','response','token','repo','branch','host','type','state','status','title','slug','path','bruch','big-data','delizaur','yycode'
+            ],
+            host: [
+              'url','location','request','origin','proxy','pointer','savvy','server','database','redis','smtp','api','backend','frontend','target','source','remote','local','virtual','current','default','public','private','primary','secondary','gateway','socket','client','service','app','site','web','mail','dns','cache','db','node','cluster','container','worker'
+            ],
+            style: [
+              'element','button','input','node','table','cell','default','hover','active','current','computed','inline','global','local','theme','text','color','border','layout','display','body','html','page','form','link','menu','header','footer','card','grid','flex','mobile','desktop','print','dark','light'
+            ],
+            properties: [
+              'german','english','french','spanish','messages','application','local','server','database','jdbc','system','config','gradle','build','project','user','default','test','production','development','staging','logging','security','mail','api','client','app','global','environment','translation','labels','errors','validation','version'
+            ],
+            zip: [
+              'clientupdate','storageapi','update','installer','patch','backup','release','source','download','archive','project','files','assets','images','data','database','logs','export','import','package','build','dist','deploy','deployment','app','application','client','server','sdk','api','docs','documentation','samples','examples','code','repo','repository','website','site','theme','plugin','module','template','resources','content','media','upload','uploads','public','private','config','settings','report','reports','invoice','invoices','resume','portfolio'
+            ],
+            mov: [
+              'video','intro','trailer','sample','demo','preview','screenrecording','recording','final','export','clip','animation','render','movie','footage','presentation','tutorial','walkthrough'
+            ],
+            sh: [
+              'install','setup','deploy','build','start','stop','restart','backup','restore','migrate','bootstrap','entrypoint','init','run','test','update','cleanup','sync','publish','release','configure','healthcheck','postinstall','preinstall','provision','download','upload','monitor','worker','server','client'
+            ],
+            md: [
+              'readme','changelog','security','contributing','code-of-conduct','license','architecture','deployment','migration','troubleshooting','roadmap','faq','docs','documentation','guide','api','setup','install','usage','examples','release','releases','changes','todo','notes','overview','design','specification','spec','governance','support','maintainers','authors'
+            ]
+          };
+
+          const domains = [...new Set(Object.entries(groups).flatMap(([tld, labels]) => labels.map(label => `${label}.${tld}`)))];
+          const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+          async function fetchRetry(url, options = {}, retries = 3) {
+            let lastError;
+            for (let attempt = 0; attempt <= retries; attempt++) {
+              try {
+                const response = await fetch(url, { ...options, signal: AbortSignal.timeout(20000) });
+                if ((response.status === 429 || response.status >= 500) && attempt < retries) {
+                  const retryAfter = Number(response.headers.get('retry-after'));
+                  await sleep(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 1200 * (2 ** attempt));
+                  continue;
+                }
+                return response;
+              } catch (error) {
+                lastError = error;
+                if (attempt < retries) {
+                  await sleep(1200 * (2 ** attempt));
+                  continue;
+                }
+              }
             }
+            throw lastError ?? new Error('request failed');
+          }
 
-            let dr = null;
-            let ahrefsStatus = null;
-            let ahrefsError = null;
+          const bootstrapResponse = await fetchRetry('https://data.iana.org/rdap/dns.json', { headers: { Accept: 'application/json' } });
+          if (!bootstrapResponse.ok) throw new Error(`IANA RDAP bootstrap failed: ${bootstrapResponse.status}`);
+          const bootstrap = await bootstrapResponse.json();
+          const rdapByTld = new Map();
+          for (const service of bootstrap.services ?? []) {
+            const [tlds, bases] = service;
+            const base = Array.isArray(bases) ? bases.find(value => String(value).startsWith('https://')) ?? bases[0] : null;
+            if (!base) continue;
+            for (const tld of tlds ?? []) rdapByTld.set(String(tld).toLowerCase(), String(base));
+          }
+
+          async function checkAvailability(domain) {
+            const tld = domain.split('.').at(-1);
+            const base = rdapByTld.get(tld);
+            if (!base) return { domain, available: null, rdapStatus: null, rdapError: 'No IANA RDAP service' };
+            const url = `${base.replace(/\/?$/, '/') }domain/${encodeURIComponent(domain)}`;
             try {
-              const r = await fetch(`https://api.ahrefs.com/v3/public/domain-rating-free?target=${encodeURIComponent(domain)}&output=json`, {
-                headers: { 'Accept': 'application/json' },
-                signal: AbortSignal.timeout(12000)
-              });
-              ahrefsStatus = r.status;
-              const text = await r.text();
-              if (r.ok) {
+              const response = await fetchRetry(url, { redirect: 'follow', headers: { Accept: 'application/rdap+json, application/json' } }, 2);
+              return {
+                domain,
+                available: response.status === 404 ? true : response.status === 200 ? false : null,
+                rdapStatus: response.status,
+                rdapError: response.status === 200 || response.status === 404 ? null : (await response.text()).slice(0, 180)
+              };
+            } catch (error) {
+              return { domain, available: null, rdapStatus: null, rdapError: String(error?.message ?? error) };
+            }
+          }
+
+          async function pool(items, concurrency, worker) {
+            const output = new Array(items.length);
+            let cursor = 0;
+            async function run() {
+              while (true) {
+                const index = cursor++;
+                if (index >= items.length) return;
+                output[index] = await worker(items[index], index);
+                await sleep(120);
+              }
+            }
+            await Promise.all(Array.from({ length: concurrency }, run));
+            return output;
+          }
+
+          console.log(`CANDIDATE_COUNT ${domains.length}`);
+          const availability = await pool(domains, 4, checkAvailability);
+          const availableRows = availability.filter(row => row.available === true);
+          console.log(`RDAP_AVAILABLE_COUNT ${availableRows.length}`);
+          console.log(`RDAP_UNKNOWN_COUNT ${availability.filter(row => row.available === null).length}`);
+
+          async function ahrefs(domain, maxRetries = 5) {
+            const endpoint = `https://api.ahrefs.com/v3/public/domain-rating-free?target=${encodeURIComponent(domain)}&output=json`;
+            for (let attempt = 0; attempt <= maxRetries; attempt++) {
+              try {
+                const response = await fetch(endpoint, {
+                  headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
+                  signal: AbortSignal.timeout(25000)
+                });
+                const text = await response.text();
+                if ((response.status === 429 || response.status >= 500) && attempt < maxRetries) {
+                  const retryAfter = Number(response.headers.get('retry-after'));
+                  await sleep(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 3000 * (attempt + 1));
+                  continue;
+                }
+                if (!response.ok) return { dr: null, ahrefsStatus: response.status, ahrefsError: text.slice(0, 220) };
                 const data = JSON.parse(text);
                 const value = data?.domain_rating?.domain_rating;
-                if (typeof value === 'number') dr = Math.round(value * 10) / 10;
-                else ahrefsError = `No rating: ${text.slice(0,200)}`;
-              } else {
-                ahrefsError = text.slice(0,300);
+                return {
+                  dr: typeof value === 'number' ? Math.round(value * 10) / 10 : null,
+                  ahrefsStatus: response.status,
+                  ahrefsError: typeof value === 'number' ? null : text.slice(0, 220)
+                };
+              } catch (error) {
+                if (attempt < maxRetries) {
+                  await sleep(3000 * (attempt + 1));
+                  continue;
+                }
+                return { dr: null, ahrefsStatus: null, ahrefsError: String(error?.message ?? error) };
               }
-            } catch (e) {
-              ahrefsError = String(e?.message || e);
             }
-
-            return { domain, dr, available, rdapStatus, ahrefsStatus, rdapError, ahrefsError };
           }
 
-          const results = [];
-          for (let i = 0; i < domains.length; i++) {
-            const row = await check(domains[i]);
-            results.push(row);
+          const controlGoogle = await ahrefs('google.com');
+          const controlExample = await ahrefs('example.com');
+          console.log(`CONTROL_GOOGLE ${JSON.stringify(controlGoogle)}`);
+          console.log(`CONTROL_EXAMPLE ${JSON.stringify(controlExample)}`);
+          if (controlGoogle.ahrefsStatus !== 200 || typeof controlGoogle.dr !== 'number') {
+            throw new Error(`Ahrefs token validation failed: ${JSON.stringify(controlGoogle)}`);
+          }
+
+          const drRows = [];
+          for (let index = 0; index < availableRows.length; index++) {
+            const availabilityRow = availableRows[index];
+            const rating = await ahrefs(availabilityRow.domain);
+            const row = { ...availabilityRow, ...rating };
+            drRows.push(row);
             console.log(`ROW ${JSON.stringify(row)}`);
-            await sleep(250);
+            await sleep(2100);
           }
-          results.sort((a,b) => (b.dr ?? -1) - (a.dr ?? -1) || a.domain.localeCompare(b.domain));
+
+          const unknownRows = availability.filter(row => row.available === null);
+          drRows.sort((a, b) => (b.dr ?? -1) - (a.dr ?? -1) || a.domain.localeCompare(b.domain));
+          const payload = {
+            checkedAt: new Date().toISOString(),
+            endpoint: 'https://api.ahrefs.com/v3/public/domain-rating-free',
+            candidateCount: domains.length,
+            availableCount: availableRows.length,
+            unknownAvailabilityCount: unknownRows.length,
+            controls: { googleCom: controlGoogle, exampleCom: controlExample },
+            results: drRows,
+            unknownAvailability: unknownRows
+          };
+          fs.writeFileSync('/tmp/results.json', JSON.stringify(payload, null, 2));
+          fs.writeFileSync('/tmp/results.log', drRows.map(row => JSON.stringify(row)).join('\n') + '\n');
           console.log('RESULTS_JSON_START');
-          console.log(JSON.stringify(results, null, 2));
+          console.log(JSON.stringify(payload, null, 2));
           console.log('RESULTS_JSON_END');
           EOF
-          node /tmp/check.mjs | tee /tmp/results.log
-      - name: Upload results
+
+          node /tmp/check.mjs
+          rm -f /tmp/ahrefs-token
+
+      - name: Upload verified results
         uses: actions/upload-artifact@v4
         with:
-          name: ahrefs-dr-results
-          path: /tmp/results.log
+          name: official-ahrefs-dr-results
+          path: |
+            /tmp/results.json
+            /tmp/results.log
           retention-days: 1
+          if-no-files-found: error
