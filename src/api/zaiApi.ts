@@ -53,6 +53,8 @@ export class ZaiApiError extends Error {
     readonly kind: ApiErrorKind,
     message: string,
     readonly statusCode?: number,
+    /** Underlying system error code (ECONNRESET, ETIMEDOUT, ...) for logs. */
+    readonly code?: string,
   ) {
     super(message);
     this.name = 'ZaiApiError';
@@ -63,10 +65,13 @@ export class ZaiApiError extends Error {
 function toApiError(err: unknown): ZaiApiError {
   if (err instanceof ZaiApiError) return err;
   const message = err instanceof Error ? err.message : String(err);
+  const code = typeof (err as { code?: unknown })?.code === 'string'
+    ? (err as { code: string }).code
+    : undefined;
   if (/timed?[\s-]?out/i.test(message)) {
-    return new ZaiApiError('timeout', message);
+    return new ZaiApiError('timeout', message, undefined, code);
   }
-  return new ZaiApiError('network', message);
+  return new ZaiApiError('network', message, undefined, code);
 }
 
 /** Pick the most actionable error when every endpoint failed. */
@@ -187,6 +192,53 @@ function makeRequest(
 }
 
 // ============================================================================
+// Retry
+// ============================================================================
+
+/**
+ * Whether a failure is worth retrying: transient transport problems
+ * (connection resets, DNS blips, timeouts) and server-side throttling or
+ * outages. Auth and parse failures are deterministic and never retried.
+ */
+function isRetryable(err: unknown): boolean {
+  if (!(err instanceof ZaiApiError)) return true; // unknown shape → assume transient
+  if (err.kind === 'network' || err.kind === 'timeout') return true;
+  if (err.kind === 'http') {
+    return err.statusCode === 429 || (err.statusCode ?? 0) >= 500;
+  }
+  return false;
+}
+
+export interface RetryOptions {
+  maxAttempts?: number;
+  baseDelayMs?: number;
+}
+
+/**
+ * Run `fn`, retrying transient failures with exponential backoff plus jitter.
+ * The default policy is 3 attempts with 400ms/1.2s backoff — long enough for
+ * a connection reset or DNS blip to clear, short enough that a real outage
+ * still surfaces quickly.
+ */
+export async function withRetry<T>(fn: () => Promise<T>, options: RetryOptions = {}): Promise<T> {
+  const maxAttempts = options.maxAttempts ?? 3;
+  const baseDelayMs = options.baseDelayMs ?? 400;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (attempt === maxAttempts || !isRetryable(err)) throw err;
+      const backoff = baseDelayMs * 3 ** (attempt - 1);
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, backoff + Math.random() * backoff * 0.5);
+      });
+    }
+  }
+  /* istanbul ignore next -- unreachable: the loop always returns or throws */
+  throw new Error('withRetry: unreachable');
+}
+
+// ============================================================================
 // Response Processing
 // ============================================================================
 
@@ -297,9 +349,9 @@ export async function fetchUsage(apiKey: string, acceptLanguage = DEFAULT_ACCEPT
 
   // Fire all three requests in parallel; catch individually
   const [quotaR, modelR, toolR] = await Promise.all([
-    toResult(makeRequest(ENDPOINTS.quotaLimit, apiKey, undefined, acceptLanguage)),
-    toResult(makeRequest(ENDPOINTS.modelUsage, apiKey, timeParams, acceptLanguage)),
-    toResult(makeRequest(ENDPOINTS.toolUsage, apiKey, timeParams, acceptLanguage)),
+    toResult(withRetry(() => makeRequest(ENDPOINTS.quotaLimit, apiKey, undefined, acceptLanguage))),
+    toResult(withRetry(() => makeRequest(ENDPOINTS.modelUsage, apiKey, timeParams, acceptLanguage))),
+    toResult(withRetry(() => makeRequest(ENDPOINTS.toolUsage, apiKey, timeParams, acceptLanguage))),
   ]);
 
   // If all three failed, surface the most actionable cause
@@ -332,9 +384,9 @@ export async function fetchRawResponses(
   const timeParams = buildTimeWindowParams();
 
   const [quota, model, tool] = await Promise.all([
-    makeRequest(ENDPOINTS.quotaLimit, apiKey, undefined, acceptLanguage).catch(e => ({ error: String(e) })),
-    makeRequest(ENDPOINTS.modelUsage, apiKey, timeParams, acceptLanguage).catch(e => ({ error: String(e) })),
-    makeRequest(ENDPOINTS.toolUsage, apiKey, timeParams, acceptLanguage).catch(e => ({ error: String(e) })),
+    withRetry(() => makeRequest(ENDPOINTS.quotaLimit, apiKey, undefined, acceptLanguage)).catch(e => ({ error: String(e) })),
+    withRetry(() => makeRequest(ENDPOINTS.modelUsage, apiKey, timeParams, acceptLanguage)).catch(e => ({ error: String(e) })),
+    withRetry(() => makeRequest(ENDPOINTS.toolUsage, apiKey, timeParams, acceptLanguage)).catch(e => ({ error: String(e) })),
   ]);
 
   return {

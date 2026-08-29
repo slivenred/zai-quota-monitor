@@ -12,6 +12,7 @@ import {
   buildTimeWindowParams,
   classifyLimit,
   selectError,
+  withRetry,
 } from '../api/zaiApi';
 import type { ApiQuotaLimitItem } from '../types';
 
@@ -79,6 +80,78 @@ describe('buildTimeWindowParams', () => {
   it('never places the window end in the future', () => {
     const { endTime } = parse(buildTimeWindowParams());
     assert.ok(endTime <= Date.now() + 1000, `endTime ${endTime} should not be after now`);
+  });
+});
+
+describe('withRetry', () => {
+  const fast = { baseDelayMs: 1 };
+
+  it('retries a transient network error and succeeds', async () => {
+    let calls = 0;
+    const result = await withRetry(async () => {
+      calls += 1;
+      if (calls === 1) throw new ZaiApiError('network', 'read ECONNRESET', undefined, 'ECONNRESET');
+      return 'ok';
+    }, fast);
+    assert.equal(result, 'ok');
+    assert.equal(calls, 2);
+  });
+
+  it('retries timeout errors', async () => {
+    let calls = 0;
+    await withRetry(async () => {
+      calls += 1;
+      if (calls < 3) throw new ZaiApiError('timeout', 'Request timed out');
+      return 42;
+    }, fast);
+    assert.equal(calls, 3);
+  });
+
+  it('retries HTTP 429 and 5xx but not other HTTP errors', async () => {
+    for (const status of [429, 502, 503]) {
+      let calls = 0;
+      await withRetry(async () => {
+        calls += 1;
+        if (calls === 1) throw new ZaiApiError('http', `HTTP ${status}`, status);
+        return true;
+      }, fast);
+      assert.equal(calls, 2, `status ${status} should be retried`);
+    }
+    let calls = 0;
+    await assert.rejects(withRetry(async () => {
+      calls += 1;
+      throw new ZaiApiError('http', 'HTTP 404', 404);
+    }, fast));
+    assert.equal(calls, 1, 'HTTP 404 should not be retried');
+  });
+
+  it('never retries auth errors', async () => {
+    let calls = 0;
+    await assert.rejects(withRetry(async () => {
+      calls += 1;
+      throw new ZaiApiError('auth', 'HTTP 401', 401);
+    }, fast), /HTTP 401/);
+    assert.equal(calls, 1);
+  });
+
+  it('gives up after maxAttempts on persistent network failures', async () => {
+    let calls = 0;
+    await assert.rejects(withRetry(async () => {
+      calls += 1;
+      throw new ZaiApiError('network', 'ENETUNREACH', undefined, 'ENETUNREACH');
+    }, { maxAttempts: 3, baseDelayMs: 1 }), /ENETUNREACH/);
+    assert.equal(calls, 3);
+  });
+
+  it('treats non-ZaiApiError rejections as transient', async () => {
+    let calls = 0;
+    const result = await withRetry(async () => {
+      calls += 1;
+      if (calls === 1) throw new Error('socket hang up');
+      return 'recovered';
+    }, fast);
+    assert.equal(result, 'recovered');
+    assert.equal(calls, 2);
   });
 });
 

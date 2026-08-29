@@ -128,9 +128,10 @@ async function doRefresh(context: vscode.ExtensionContext, options: { manual?: b
     checkNotifications(data);
   } catch (err) {
     const rawMsg = err instanceof Error ? err.message : String(err);
+    const errCode = err instanceof ZaiApiError && err.code ? ` [${err.code}]` : '';
     const msg = localizeApiError(err, strings);
     lastRefreshOk = false;
-    outputChannel.error(`Refresh failed: ${rawMsg}`);
+    outputChannel.error(`Refresh failed: ${rawMsg}${errCode}`);
     // Keep the last known usage visible when we have it.
     indicator.showError(msg, lastData);
 
