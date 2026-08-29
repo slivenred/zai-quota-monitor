@@ -1,0 +1,86 @@
+name: Temporary secure Ahrefs bridge
+
+on:
+  push:
+    branches:
+      - tmp-ahrefs-public-bridge-20260824
+
+permissions:
+  contents: write
+
+jobs:
+  secure-bridge:
+    if: ${{ !contains(github.event.head_commit.message, '[bridge-data]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout temporary branch
+        uses: actions/checkout@v4
+        with:
+          ref: tmp-ahrefs-public-bridge-20260824
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Generate ephemeral RSA keypair
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 -out /tmp/private.pem
+          openssl pkey -in /tmp/private.pem -pubout -out .tmp-ahrefs/public.pem
+          git config user.name "Temporary secure bridge"
+          git config user.email "actions@users.noreply.github.com"
+          git add .tmp-ahrefs/public.pem
+          git commit -m "chore: publish ephemeral bridge key [bridge-data]"
+          git push origin HEAD:tmp-ahrefs-public-bridge-20260824
+
+      - name: Await encrypted API key
+        shell: bash
+        run: |
+          set -euo pipefail
+          found=0
+          for attempt in $(seq 1 120); do
+            git fetch origin tmp-ahrefs-public-bridge-20260824 --quiet
+            if git show origin/tmp-ahrefs-public-bridge-20260824:.tmp-ahrefs/cipher.b64 > /tmp/cipher.b64 2>/dev/null; then
+              found=1
+              break
+            fi
+            sleep 5
+          done
+          if [ "$found" -ne 1 ]; then
+            echo "::error::Encrypted API key was not supplied."
+            exit 1
+          fi
+          git pull --rebase origin tmp-ahrefs-public-bridge-20260824
+
+      - name: Decrypt, mask, and verify Ahrefs DR
+        shell: bash
+        run: |
+          set -euo pipefail
+          base64 --decode /tmp/cipher.b64 > /tmp/cipher.bin
+          openssl pkeyutl -decrypt \
+            -inkey /tmp/private.pem \
+            -in /tmp/cipher.bin \
+            -out /tmp/token.txt \
+            -pkeyopt rsa_padding_mode:oaep \
+            -pkeyopt rsa_oaep_md:sha256
+          AHREFS_TOKEN="$(cat /tmp/token.txt)"
+          if [ -z "$AHREFS_TOKEN" ]; then
+            echo "::error::Decrypted API key is empty."
+            exit 1
+          fi
+          echo "::add-mask::${AHREFS_TOKEN}"
+          export AHREFS_TOKEN
+          python3 .tmp-ahrefs/run.py
+          shred -u /tmp/token.txt /tmp/cipher.bin /tmp/private.pem 2>/dev/null || true
+
+      - name: Commit results and remove bridge material
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .tmp-ahrefs/public.pem .tmp-ahrefs/cipher.b64
+          git config user.name "Temporary secure bridge"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A .tmp-ahrefs
+          git commit -m "chore: save official Ahrefs DR results [bridge-data]"
+          git push origin HEAD:tmp-ahrefs-public-bridge-20260824
