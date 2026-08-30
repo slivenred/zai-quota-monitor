@@ -1,0 +1,78 @@
+name: Temporary fast domain history verification
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tmp-domain-history-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Inspect public history records
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/history.mjs <<'EOF'
+          import fs from 'node:fs';
+          const domains = ['form.name','file.name','hover.style','state.name','source.zip','target.name','app.name','parent.name','record.name','theme.zip','location.host','site.name','url.host','object.name','key.name','query.name'];
+          const badTerms = ['casino','gambling','sportsbook','betting','slot','porn','xxx','adult','escort','viagra','cialis','pharmacy','payday loan','crypto casino','博彩','赌场','色情','成人影片','壯陽','壮阳','貸款','贷款'];
+          const parkingTerms = ['domain for sale','buy this domain','this domain may be for sale','sedo','afternic','dan.com','bodis','parkingcrew','hugedomains','undeveloped.com','domainmarket','above.com','cashparking'];
+          const sleep = ms => new Promise(r => setTimeout(r, ms));
+          async function fetchText(url, timeout = 9000) {
+            const r = await fetch(url, { redirect:'follow', headers:{'User-Agent':'Mozilla/5.0 history-audit/1.1'}, signal:AbortSignal.timeout(timeout) });
+            return { status:r.status, text:await r.text() };
+          }
+          function scan(html) {
+            const lower = html.toLowerCase();
+            const m = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+            return {
+              title:m ? m[1].replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim().slice(0,160) : '',
+              badTerms:badTerms.filter(x=>lower.includes(x.toLowerCase())),
+              parkingTerms:parkingTerms.filter(x=>lower.includes(x.toLowerCase()))
+            };
+          }
+          async function inspect(domain) {
+            const out={domain,captureCount:null,firstCapture:null,lastCapture:null,cdxStatus:null,cdxError:null,snapshots:[],urlscanCount:null,urlscanMalicious:null,urlscanTitles:[],urlscanError:null};
+            try {
+              const q=new URLSearchParams({url:`${domain}/*`,output:'json',fl:'timestamp,original,statuscode,mimetype,digest',filter:'statuscode:200',collapse:'digest',limit:'500'});
+              const res=await fetchText(`https://web.archive.org/cdx/search/cdx?${q}`,10000);
+              out.cdxStatus=res.status;
+              if(res.status===200 && res.text.trim()){
+                const j=JSON.parse(res.text); const h=j[0]||[]; const rows=(j.slice(1)||[]).map(v=>Object.fromEntries(h.map((x,i)=>[x,v[i]]))).sort((a,b)=>String(a.timestamp).localeCompare(String(b.timestamp)));
+                out.captureCount=rows.length; out.firstCapture=rows[0]?.timestamp||null; out.lastCapture=rows.at(-1)?.timestamp||null;
+                const picks=rows.length?[rows[0],...(rows.length>1?[rows.at(-1)]:[])]:[];
+                for(const row of picks){
+                  try{const s=await fetchText(`https://web.archive.org/web/${row.timestamp}id_/${row.original}`,8000);out.snapshots.push({timestamp:row.timestamp,original:row.original,status:s.status,...scan(s.text)});}catch(e){out.snapshots.push({timestamp:row.timestamp,original:row.original,error:String(e?.message||e)});}
+                }
+              } else out.cdxError=res.text.slice(0,220);
+            }catch(e){out.cdxError=String(e?.message||e);}
+            try{
+              const res=await fetchText(`https://urlscan.io/api/v1/search/?q=domain:${encodeURIComponent(domain)}&size=100`,8000);
+              if(res.status===200){const j=JSON.parse(res.text);const rows=Array.isArray(j.results)?j.results:[];out.urlscanCount=rows.length;out.urlscanMalicious=rows.filter(x=>x?.verdicts?.overall?.malicious===true).length;out.urlscanTitles=[...new Set(rows.map(x=>x?.page?.title).filter(Boolean))].slice(0,8);}else out.urlscanError=res.text.slice(0,220);
+            }catch(e){out.urlscanError=String(e?.message||e);}
+            return out;
+          }
+          const results=new Array(domains.length);let cursor=0;
+          async function worker(){while(true){const i=cursor++;if(i>=domains.length)return;results[i]=await inspect(domains[i]);console.log(`ROW ${JSON.stringify(results[i])}`);await sleep(200);}}
+          await Promise.all(Array.from({length:4},worker));
+          const payload={checkedAt:new Date().toISOString(),results};
+          fs.writeFileSync('/tmp/history-results.json',JSON.stringify(payload,null,2));
+          console.log('RESULTS_JSON_START');console.log(JSON.stringify(payload,null,2));console.log('RESULTS_JSON_END');
+          EOF
+          node /tmp/history.mjs
+      - name: Upload history audit
+        uses: actions/upload-artifact@v4
+        with:
+          name: verified-domain-history-fast
+          path: /tmp/history-results.json
+          retention-days: 1
+          if-no-files-found: error
